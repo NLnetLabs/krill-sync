@@ -1,0 +1,32 @@
+name: ci
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        rust: [1.42.0, stable]
+      fail-fast: false
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+    - name: Install Rust
+      uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: ${{ matrix.rust }}
+    - if: matrix.rust != 'nightly'
+      run: rustup component add clippy
+    - if: matrix.rust != 'nightly'
+      run: cargo clippy -- -D warnings
+    - run: cargo build --verbose
+    - run: cargo test --verbose
