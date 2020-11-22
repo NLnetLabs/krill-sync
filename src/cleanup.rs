@@ -8,12 +8,30 @@ use walkdir::{DirEntry, WalkDir};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-// TODO: reduce duplication with cleanup_deltas()
+fn is_orphaned(serial: RrdpSerialNumber, last_serial: u64) -> bool {
+    // An RRDP snapshot is "orphaned" if it is not mentioned in the RRDP 8182
+    // Notification File.
+    serial < last_serial
+}
+
+fn is_expired(
+    serial: RrdpSerialNumber,
+    publication_timestamps: &PublicationTimestamps,
+    expiration_time: SecondsSinceEpoch) -> bool
+{
+    // An RRDP delta is "expired" if the RRDP 8182 Notification File by the
+    // same serial number, or a later Notification File, was published by us
+    // more than expiration_time seconds ago.
+    publication_timestamps.iter().any(|(pub_serial, pub_ts)| {
+        *pub_serial >= serial && *pub_ts < expiration_time
+    })
+}
+
 pub fn cleanup_snapshots(
     path_to_cleanup: &Path,
     cleanup_after_seconds: u64,
     last_serial: RrdpSerialNumber,
-    publication_timestamps: &mut PublicationTimestamps) -> Result<()>
+    publication_timestamps: &PublicationTimestamps) -> Result<()>
 {
     //      | client       | client    | server       | server    | server
     //      | retrieved    | retrieved | published    | published | deleted
@@ -68,25 +86,6 @@ pub fn cleanup_snapshots(
         None
     }
 
-    fn is_orphaned(serial: RrdpSerialNumber, last_serial: u64) -> bool {
-        // An RRDP snapshot is "orphaned" if it is not mentioned in the RRDP 8182
-        // Notification File.
-        serial < last_serial
-    }
-
-    fn is_expired(
-        serial: RrdpSerialNumber,
-        publication_timestamps: &PublicationTimestamps,
-        expiration_time: SecondsSinceEpoch) -> bool
-    {
-        // An RRDP delta is "expired" if the RRDP 8182 Notification File by the
-        // same serial number, or a later Notification File, was published by us
-        // more than expiration_time seconds ago.
-        publication_timestamps.iter().any(|(pub_serial, pub_ts)| {
-            *pub_serial >= serial && *pub_ts < expiration_time
-        })
-    }
-
     let now: SecondsSinceEpoch = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
     let threshold_secs = now - cleanup_after_seconds;
@@ -103,10 +102,19 @@ pub fn cleanup_snapshots(
             .filter(|(_, serial)| is_expired(*serial, publication_timestamps, threshold_secs))
                 .inspect(|(_, serial)| debug!("Snapshot {} is expired and will be deleted", serial))
             .fold(0, |acc, (path, serial)| {
-                match std::fs::remove_file(&path) {
-                    Ok(_)    => { trace!("File {:?} for snapshot {} has been deleted", path, serial); acc + 1 },
-                    Err(err) => { error!("Failed to cleanup snapshot {} path {:?}: {}", serial, path, err); acc },
+                let acc = match std::fs::remove_file(&path) {
+                    Ok(_)    => { trace!("File {:?} for serial {} has been deleted", path, serial); acc + 1 },
+                    Err(err) => { error!("Failed to cleanup serial {} path {:?}: {}", serial, path, err); acc },
+                };
+
+                // also remove the notification.xml.<serial> if it exists
+                let old_notification_xml_path = format!("{}.{}", &path_to_cleanup.join(config::NOTIFICATION_FNAME).display(), serial);
+                match std::fs::remove_file(&old_notification_xml_path) {
+                    Ok(_)    => trace!("File {:?} for serial {} has been deleted", old_notification_xml_path, serial),
+                    Err(err) => error!("Failed to cleanup serial {} path {:?}: {}", serial, old_notification_xml_path, err),
                 }
+
+                acc
             });
 
         if num_cleaned > 0 {
@@ -117,7 +125,60 @@ pub fn cleanup_snapshots(
     Ok(())
 }
 
-// TODO: reduce duplication with cleanup_snapshots()
+
+pub fn cleanup_rsync_dirs(
+    path_to_cleanup: &Path,
+    cleanup_after_seconds: u64,
+    last_serial: RrdpSerialNumber,
+    publication_timestamps: &PublicationTimestamps) -> Result<()>
+{
+    fn is_rsync_backup_dir(entry: &DirEntry, path_to_cleanup: &Path) -> Option<(PathBuf, RrdpSerialNumber)> {
+        if let Some(path_str) = entry.path().to_str() {
+            if path_str.starts_with(path_to_cleanup.to_str().unwrap()) {
+                if let Some(ext) = entry.path().extension() {
+                    if let Some(ext_str) = ext.to_str() {
+                        if let Ok(serial) = ext_str.parse::<RrdpSerialNumber>() {
+                            return Some((entry.path().to_path_buf(), serial));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    let now: SecondsSinceEpoch = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+    let threshold_secs = now - cleanup_after_seconds;
+
+    debug!("Remove old rsync directory backups published at least {} seconds ago",
+        cleanup_after_seconds);
+
+    if path_to_cleanup.is_dir() {
+        if let Some(parent) = path_to_cleanup.parent() {
+            let num_cleaned = WalkDir::new(&parent).into_iter()
+                .filter_map(|e| is_rsync_backup_dir(&e.unwrap(), path_to_cleanup))
+                    .inspect(|(path, serial)| trace!("Found rsync backup dir for serial {}: {:?}", serial, path))
+                .filter(|(_, serial)| is_orphaned(*serial, last_serial))
+                    .inspect(|(_, serial)| trace!("Snapshot {} is orphaned", serial))
+                .filter(|(_, serial)| is_expired(*serial, publication_timestamps, threshold_secs))
+                    .inspect(|(_, serial)| debug!("Snapshot {} is expired and will be deleted", serial))
+                .fold(0, |acc, (path, serial)| {
+                    match std::fs::remove_dir_all(&path) {
+                        Ok(_)    => { trace!("Directory {:?} for serial {} has been deleted", path, serial); acc + 1 },
+                        Err(err) => { error!("Failed to cleanup serial {} directory {:?}: {}", serial, path, err); acc },
+                    }
+                });
+
+            if num_cleaned > 0 {
+                info!("Removed {} dangling expired Rsync backups", num_cleaned);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub fn cleanup_deltas(
     path_to_cleanup: &Path,
     cleanup_after_seconds: u64,
@@ -139,19 +200,6 @@ pub fn cleanup_deltas(
         // An RRDP delta is "orphaned" if it is not mentioned in the RRDP 8182
         // Notification File.
         notify.deltas.iter().find(|(delta_serial, _)| *delta_serial == serial).is_none()
-    }
-
-    fn is_expired(
-        serial: RrdpSerialNumber,
-        publication_timestamps: &PublicationTimestamps,
-        expiration_time: SecondsSinceEpoch) -> bool
-    {
-        // An RRDP delta is "expired" if the RRDP 8182 Notification File by the
-        // same serial number, or a later Notification File, was published by us
-        // more than expiration_time seconds ago.
-        publication_timestamps.iter().any(|(pub_serial, pub_ts)| {
-            *pub_serial >= serial && *pub_ts < expiration_time
-        })
     }
 
     let now: SecondsSinceEpoch = SystemTime::now()

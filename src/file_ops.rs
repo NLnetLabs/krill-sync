@@ -28,15 +28,27 @@ pub fn set_path_ext(path: &Path, ext: &str) -> PathBuf {
 }
 
 // Assumes that the old data is named XXX and the new data is named XXX.tmp.
-fn install_using_moves(final_path: &Path, is_dir: bool) -> Result<()> {
+fn install_using_moves(
+    final_path: &Path,
+    is_dir: bool,
+    keep_with_extension: Option<String>) -> Result<()>
+{
     // This path represents the new data
     let new_path = set_path_ext(final_path, config::TMP_FILE_EXT);
 
-    // This path is where the current (old) data will be moved out of the way to
-    let mut old_path = final_path.to_path_buf();
-    old_path.set_extension("old");
+    let delete_after = keep_with_extension.is_none();
 
-    trace!("Atomic move {:?} -> {:?} -> {:?}", &new_path, &final_path, &old_path);
+    // This path is where the current (old) data will be moved out of the way to
+    let old_extension = keep_with_extension.unwrap_or(config::OLD_FILE_EXT.to_string());
+    // Don't lose the original extension, append a new one
+    let old_path_str = format!("{}.{}", final_path.to_str().unwrap(), old_extension);
+    let old_path = Path::new(&old_path_str);
+
+    if !final_path.exists() {
+        trace!("Atomic move {:?} -> {:?}", &new_path, &final_path);
+    } else {
+        trace!("Atomic move {:?} -> {:?} -> {:?}", &new_path, &final_path, &old_path);
+    }
 
     // The destination for the current data that will be moved out of the way to
     // the "old" location should be free.
@@ -52,22 +64,24 @@ fn install_using_moves(final_path: &Path, is_dir: bool) -> Result<()> {
     // Move new data to final home
     std::fs::rename(&new_path, &final_path)?;
 
-    // Remove old data, if any
-    if is_dir {
-        if old_path.is_dir() {
-            std::fs::remove_dir_all(&old_path)?;
+    if delete_after {
+        // Remove old data, if any
+        if is_dir {
+            if old_path.is_dir() {
+                std::fs::remove_dir_all(&old_path)?;
+            }
+        } else if old_path.is_file() {
+            std::fs::remove_file(&old_path)?;
         }
-    } else if old_path.is_file() {
-        std::fs::remove_file(&old_path)?;
     }
 
     Ok(())
 }
 
-pub fn install_new_dir(final_path: &Path) -> Result<()> {
-    install_using_moves(final_path, true)
+pub fn install_new_dir(final_path: &Path, keep_with_extension: String) -> Result<()> {
+    install_using_moves(final_path, true, Some(keep_with_extension))
 }
 
-pub fn install_new_file(final_path: &Path) -> Result<()> {
-    install_using_moves(final_path, false)
+pub fn install_new_file(final_path: &Path, keep_with_extension: String) -> Result<()> {
+    install_using_moves(final_path, false, Some(keep_with_extension))
 }

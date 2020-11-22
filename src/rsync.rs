@@ -1,3 +1,4 @@
+use crate::state::RrdpSerialNumber;
 use crate::config::{self, Opt};
 use crate::file_ops;
 use crate::http::HttpClient;
@@ -21,7 +22,8 @@ pub fn build_repo_from_rrdp_snapshot(
     opt: &Opt,
     notify: &mut NotificationFile,
     client: &HttpClient,
-    raw_snapshot: &[u8]) -> Result<()>
+    raw_snapshot: &[u8],
+    last_serial: RrdpSerialNumber) -> Result<()>
 {
     info!("Updating Rsync repository");
 
@@ -37,7 +39,7 @@ pub fn build_repo_from_rrdp_snapshot(
     .map_err(|err| anyhow!("Error updating Rsync repository: {:?}", &err))?;
 
     info!("Performing atomic update of the Rsync repository");
-    file_ops::install_new_dir(&opt.rsync_dir)?;
+    file_ops::install_new_dir(&opt.rsync_dir, last_serial.to_string())?;
 
     Ok(())
 }

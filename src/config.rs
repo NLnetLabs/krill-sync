@@ -15,6 +15,7 @@ pub const REPORT_PERCENTAGE: usize = 10;
 pub const REPORT_MIN: usize = 200;
 pub const SNAPSHOT_FNAME: &str = "snapshot.xml";
 pub const TMP_FILE_EXT: &str = "tmp";
+pub const OLD_FILE_EXT: &str = "old";
 pub const USER_AGENT: &str = concat!(crate_name!(), "/", crate_version!());
 
 /// The default number of seconds after we have published a snapshot or delta

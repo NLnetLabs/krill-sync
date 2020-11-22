@@ -120,6 +120,15 @@ fn try_main() -> Result<()> {
         state.notify_serial,
         &mut state.publication_timestamps)?;
 
+    // =============================
+    // Cleanup old rsync directories
+    // =============================
+    cleanup::cleanup_rsync_dirs(
+        &opt.rsync_dir,
+        opt.cleanup_after,
+        state.notify_serial,
+        &mut state.publication_timestamps)?;
+
     // ============================================
     // Download the RFC-8182 RRDP Notification File
     // ============================================
@@ -216,7 +225,7 @@ fn try_main() -> Result<()> {
     // changes to it and thus are forced to download the entire snapshot XML.
     if is_rsync_format_enabled(&opt) {
         rsync::build_repo_from_rrdp_snapshot(
-            &opt, &mut notify, &rrdp_http_client, &raw_snapshot)?;
+            &opt, &mut notify, &rrdp_http_client, &raw_snapshot, state.notify_serial)?;
     }
 
     // ===================================================
@@ -247,7 +256,7 @@ fn try_main() -> Result<()> {
         let final_path = &opt.rrdp_dir.join(config::NOTIFICATION_FNAME);
         let tmp_path = file_ops::set_path_ext(&final_path, config::TMP_FILE_EXT);
         file_ops::write_buf(&tmp_path, &raw_notification_file)?;
-        file_ops::install_new_file(&final_path)?;
+        file_ops::install_new_file(&final_path, state.notify_serial.to_string())?;
 
         let seconds_since_epoch = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?.as_secs();
