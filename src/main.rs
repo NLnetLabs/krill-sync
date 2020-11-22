@@ -118,7 +118,7 @@ fn try_main() -> Result<()> {
         &opt.rrdp_dir,
         opt.cleanup_after,
         state.notify_serial,
-        &mut state.publication_timestamps)?;
+        &state.publication_timestamps)?;
 
     // =============================
     // Cleanup old rsync directories
