@@ -16,7 +16,7 @@ pub type SecondsSinceEpoch = i64; // same as Chrono::DateTime::timestamp()
 // harder and indirect to read it from the last downloaded notification file
 // and (b) on systems that only serve an Rsync repository there won't even be
 // a notification file to read it from or any notion of RRDP serial number.
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, Clone)]
 pub struct State {
     pub notify_uri: Option<String>,
     pub notify_etag: Option<String>,
