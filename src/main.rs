@@ -122,7 +122,7 @@ fn try_main() -> Result<()> {
         &opt.rrdp_dir,
         cleanup_older_than_ts,
         state.notify_serial,
-        &state.rrdp_publication_timestamps)?;
+        &new_state.rrdp_publication_timestamps)?;
 
     // =============================
     // Cleanup old rsync directories
@@ -131,7 +131,7 @@ fn try_main() -> Result<()> {
         &opt.rsync_dir,
         cleanup_older_than_ts,
         state.notify_serial,
-        &mut state.rsync_publication_timestamps)?;
+        &mut new_state.rsync_publication_timestamps)?;
 
     // ============================================
     // Download the RFC-8182 RRDP Notification File
@@ -189,7 +189,7 @@ fn try_main() -> Result<()> {
             &opt.rrdp_dir,
             cleanup_older_than_ts,
             &notify,
-            &mut state.rrdp_publication_timestamps)?;
+            &mut new_state.rrdp_publication_timestamps)?;
 
         // Prevent any possible fetches to the real target that would occur if the
         // uri in the notify object is used as-is, instead modify it to point to the
@@ -248,7 +248,6 @@ fn try_main() -> Result<()> {
                 &opt, &mut notify, &rrdp_http_client, &raw_snapshot, state.notify_serial)?;
 
             let seconds_since_epoch = Utc::now().timestamp();
-            new_state.rsync_publication_timestamps.extend(state.rsync_publication_timestamps.iter());
             new_state.rsync_publication_timestamps.insert(new_state.notify_serial, seconds_since_epoch);
         }
 
@@ -283,7 +282,6 @@ fn try_main() -> Result<()> {
             file_ops::install_new_file(&final_path, state.notify_serial.to_string())?;
 
             let seconds_since_epoch = Utc::now().timestamp();
-            new_state.rrdp_publication_timestamps.extend(state.rrdp_publication_timestamps.iter());
             new_state.rrdp_publication_timestamps.insert(new_state.notify_serial, seconds_since_epoch);
         }
     }
