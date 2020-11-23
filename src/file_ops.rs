@@ -1,3 +1,4 @@
+use chrono::Utc;
 use crate::config;
 
 use anyhow::{anyhow, Result};
@@ -38,10 +39,25 @@ fn install_using_moves(
 
     let delete_after = keep_with_extension.is_none();
 
-    // This path is where the current (old) data will be moved out of the way to
+    // Determine where the current (old) data will be moved out of the way to
+    // Don't lose the original extension.
     let old_extension = keep_with_extension.unwrap_or(config::OLD_FILE_EXT.to_string());
-    // Don't lose the original extension, append a new one
-    let old_path_str = format!("{}.{}", final_path.to_str().unwrap(), old_extension);
+
+    let old_path_str = {
+        let old_path_str = format!("{}.{}", &final_path.to_string_lossy(), old_extension);
+        let old_path = Path::new(&old_path_str);
+
+        // The destination for the current data that will be moved out of the way to
+        // the "old" location should be free. If not, append a timestamp to the name
+        // we will move to to make it unique. We don't want to delete old data as
+        // clients may still be transferring it so we manage the deletion at the
+        // right time in the cleanup module.
+        if (is_dir && old_path.is_dir()) || (!is_dir && old_path.is_file()) {
+            format!("{}_{}", &old_path.to_string_lossy(), Utc::now().timestamp())
+        } else {
+            old_path_str
+        }
+    };
     let old_path = Path::new(&old_path_str);
 
     if !final_path.exists() {
@@ -50,14 +66,9 @@ fn install_using_moves(
         trace!("Atomic move {:?} -> {:?} -> {:?}", &new_path, &final_path, &old_path);
     }
 
-    // The destination for the current data that will be moved out of the way to
-    // the "old" location should be free.
-    if (is_dir && old_path.is_dir()) || (!is_dir && old_path.is_file()) {
-        panic!("Unable to perform atomic move, old data in the way: {:?}", &old_path);
-    }
-
     // Move old data out of the way
     if (is_dir && final_path.is_dir()) || (!is_dir && final_path.is_file()) {
+        trace!("Moving old data from {:?} to {:?}", &final_path, &old_extension);
         std::fs::rename(&final_path, &old_path)?;
     }
 
