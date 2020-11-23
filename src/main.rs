@@ -8,7 +8,10 @@ mod lock;
 mod rrdp;
 mod rsync;
 mod state;
+mod util;
 
+use chrono::Utc;
+use crate::state::SecondsSinceEpoch;
 use crate::config::{Format, Opt};
 use crate::http::DownloadResult;
 use crate::rrdp::NotificationFile;
@@ -16,8 +19,6 @@ use crate::state::State;
 
 use anyhow::{anyhow, Result};
 use routinator::rpki::rrdp::UriAndHash;
-
-use std::time::SystemTime;
 
 fn is_rrdp_format_enabled(opt: &Opt) -> bool {
     opt.format == Format::BOTH || opt.format == Format::RRDP
@@ -111,23 +112,26 @@ fn try_main() -> Result<()> {
     };
     let mut new_state = State::default();
 
+    let now: SecondsSinceEpoch = Utc::now().timestamp();
+    let cleanup_older_than_ts = now - opt.cleanup_after;
+
     // ==========================
     // Cleanup old snapshot files
     // ==========================
     cleanup::cleanup_snapshots(
         &opt.rrdp_dir,
-        opt.cleanup_after,
+        cleanup_older_than_ts,
         state.notify_serial,
-        &state.publication_timestamps)?;
+        &state.rrdp_publication_timestamps)?;
 
     // =============================
     // Cleanup old rsync directories
     // =============================
     cleanup::cleanup_rsync_dirs(
         &opt.rsync_dir,
-        opt.cleanup_after,
+        cleanup_older_than_ts,
         state.notify_serial,
-        &mut state.publication_timestamps)?;
+        &mut state.rsync_publication_timestamps)?;
 
     // ============================================
     // Download the RFC-8182 RRDP Notification File
@@ -167,9 +171,9 @@ fn try_main() -> Result<()> {
     // as deltas listed in the Notification File must not be deleted.
     cleanup::cleanup_deltas(
         &opt.rrdp_dir,
-        opt.cleanup_after,
+        cleanup_older_than_ts,
         &notify,
-        &mut state.publication_timestamps)?;
+        &mut state.rrdp_publication_timestamps)?;
 
     // Prevent any possible fetches to the real target that would occur if the
     // uri in the notify object is used as-is, instead modify it to point to the
@@ -226,6 +230,10 @@ fn try_main() -> Result<()> {
     if is_rsync_format_enabled(&opt) {
         rsync::build_repo_from_rrdp_snapshot(
             &opt, &mut notify, &rrdp_http_client, &raw_snapshot, state.notify_serial)?;
+
+        let seconds_since_epoch = Utc::now().timestamp();
+        new_state.rsync_publication_timestamps.extend(state.rsync_publication_timestamps.iter());
+        new_state.rsync_publication_timestamps.insert(new_state.notify_serial, seconds_since_epoch);
     }
 
     // ===================================================
@@ -258,10 +266,9 @@ fn try_main() -> Result<()> {
         file_ops::write_buf(&tmp_path, &raw_notification_file)?;
         file_ops::install_new_file(&final_path, state.notify_serial.to_string())?;
 
-        let seconds_since_epoch = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?.as_secs();
-        new_state.publication_timestamps.extend(state.publication_timestamps.iter());
-        new_state.publication_timestamps.insert(new_state.notify_serial, seconds_since_epoch);
+        let seconds_since_epoch = Utc::now().timestamp();
+        new_state.rrdp_publication_timestamps.extend(state.rrdp_publication_timestamps.iter());
+        new_state.rrdp_publication_timestamps.insert(new_state.notify_serial, seconds_since_epoch);
     }
 
     // Write out our state now that we have successfully finished

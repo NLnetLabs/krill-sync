@@ -108,7 +108,7 @@ pub struct Opt {
 
     /// The minimum number of seconds that a dangling snapshot or delta must have been published by krill-sync before it can be removed
     #[structopt(long = "cleanup-after", value_name = "seconds", default_value = DEFAULT_CLEANUP_SECONDS)]
-    pub cleanup_after: u64,
+    pub cleanup_after: i64,
 
     /// Whether or not localhost connections and self-signed certificates are
     /// allowed.
