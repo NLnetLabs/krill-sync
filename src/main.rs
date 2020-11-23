@@ -106,7 +106,7 @@ fn try_main() -> Result<()> {
     // Load previously saved state, if available
     // =========================================
     let state_path = opt.state_dir.join("state");
-    let (mut state, state_loaded) = match state::load_state(&state_path)? {
+    let (state, state_loaded) = match state::load_state(&state_path)? {
         Some(state) => (state, true),
         None => (State::default(), false)
     };
@@ -176,7 +176,7 @@ fn try_main() -> Result<()> {
         &opt.rrdp_dir,
         cleanup_older_than_ts,
         state.notify_serial,
-        &mut state.rsync_publication_timestamps)?;
+        &state.rsync_publication_timestamps)?;
 
     // =======================
     // Cleanup old delta files

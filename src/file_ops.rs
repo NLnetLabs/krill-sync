@@ -41,7 +41,7 @@ fn install_using_moves(
 
     // Determine where the current (old) data will be moved out of the way to
     // Don't lose the original extension.
-    let old_extension = keep_with_extension.unwrap_or(config::OLD_FILE_EXT.to_string());
+    let old_extension = keep_with_extension.unwrap_or_else(|| config::OLD_FILE_EXT.to_string());
 
     let old_path_str = {
         let old_path_str = format!("{}.{}", &final_path.to_string_lossy(), old_extension);

@@ -47,15 +47,13 @@ fn is_notification_backup_file(entry: &DirEntry) -> Option<(PathBuf, RrdpSerialN
     // ^ depth 0       ^ depth 1
     //                 ^^^^^^^^^^^^^^^^ = file stem
     //                                  ^^^^^^^^^^^^^^^^^^^^^^ = extension
-    if entry.depth() == 1 && entry.file_type().is_file() {
-        if entry.path().file_stem()?.to_string_lossy() == NOTIFICATION_FNAME {
-            if let Some(ext) = entry.path().extension() {
-                // Handle the possible presence of a _<timestamp> appended to
-                // the extension
-                if let Some(serial_str) = ext.to_string_lossy().split('_').nth(0) {
-                    if let Ok(serial) = serial_str.parse::<RrdpSerialNumber>() {
-                        return Some((entry.path().to_path_buf(), serial));
-                    }
+    if entry.depth() == 1 && entry.file_type().is_file() && entry.path().file_stem()?.to_string_lossy() == NOTIFICATION_FNAME {
+        if let Some(ext) = entry.path().extension() {
+            // Handle the possible presence of a _<timestamp> appended to
+            // the extension
+            if let Some(serial_str) = ext.to_string_lossy().split('_').next() {
+                if let Ok(serial) = serial_str.parse::<RrdpSerialNumber>() {
+                    return Some((entry.path().to_path_buf(), serial));
                 }
             }
         }
@@ -78,15 +76,13 @@ fn is_rsync_backup_dir(entry: &DirEntry, rsync_data_parent_dir: &Path) -> Option
     // ../<rsync data dir>.<rrdp serial number>[_<timestamp>]
     // ^ depth 0  ^ depth 1
     //    ^^^^^^^^^^^^^^^^ = file stem
-    if entry.depth() == 1 && entry.file_type().is_dir() {
-        if entry.path().file_stem() == rsync_data_parent_dir.file_name() {
-            if let Some(ext) = entry.path().extension() {
-                // Handle the possible presence of a _<timestamp> appended to
-                // the extension
-                if let Some(serial_str) = ext.to_string_lossy().split('_').nth(0) {
-                    if let Ok(serial) = serial_str.parse::<RrdpSerialNumber>() {
-                        return Some((entry.path().to_path_buf(), serial));
-                    }
+    if entry.depth() == 1 && entry.file_type().is_dir() && entry.path().file_stem() == rsync_data_parent_dir.file_name() {
+        if let Some(ext) = entry.path().extension() {
+            // Handle the possible presence of a _<timestamp> appended to
+            // the extension
+            if let Some(serial_str) = ext.to_string_lossy().split('_').next() {
+                if let Ok(serial) = serial_str.parse::<RrdpSerialNumber>() {
+                    return Some((entry.path().to_path_buf(), serial));
                 }
             }
         }
@@ -166,7 +162,7 @@ pub fn cleanup_notification_files(
     path_to_cleanup: &Path,
     cleanup_older_than_ts: SecondsSinceEpoch,
     last_serial: RrdpSerialNumber,
-    publication_timestamps: &mut PublicationTimestamps) -> Result<()>
+    publication_timestamps: &PublicationTimestamps) -> Result<()>
 {
     debug!("Remove dangling RRDP notification files published before {}",
         util::human_readable_secs_since_epoch(cleanup_older_than_ts));
@@ -182,8 +178,6 @@ pub fn cleanup_notification_files(
             .filter(|(_, serial)| is_expired_serial(*serial, &pub_ts_copy, cleanup_older_than_ts))
                 .inspect(|(_, serial)| debug!("Notification backup {} is expired and will be deleted", serial))
             .fold(0, |acc, (path, serial)| {
-                publication_timestamps.remove(&serial);
-
                 match std::fs::remove_file(&path) {
                     Ok(_)    => { trace!("File {:?} for serial {} has been deleted", path, serial); acc + 1 },
                     Err(err) => { error!("Failed to cleanup notification backup file {:?} for serial {}: {}", path, serial, err); acc },
@@ -241,7 +235,7 @@ pub fn cleanup_deltas(
     path_to_cleanup: &Path,
     cleanup_older_than_ts: SecondsSinceEpoch,
     notify: &NotificationFile,
-    publication_timestamps: &PublicationTimestamps) -> Result<()>
+    publication_timestamps: &mut PublicationTimestamps) -> Result<()>
 {
     fn is_orphaned_delta(serial: RrdpSerialNumber, notify: &NotificationFile) -> bool {
         // An RRDP delta is "orphaned" if it is not mentioned in the RRDP 8182
@@ -252,15 +246,19 @@ pub fn cleanup_deltas(
     debug!("Remove dangling RRDP deltas published before {}",
         util::human_readable_secs_since_epoch(cleanup_older_than_ts));
 
+    let pub_ts_copy = publication_timestamps.clone();
+
     if path_to_cleanup.is_dir() {
         let num_cleaned = WalkDir::new(&path_to_cleanup).max_depth(3).into_iter()
         .filter_map(|e| is_delta_dir(&e.unwrap()))
             .inspect(|(path, serial)| trace!("Found delta dir for serial {}: {:?}", serial, path))
         .filter(|(_, serial)| is_orphaned_delta(*serial, notify))
             .inspect(|(_, serial)| trace!("Delta {} is orphaned", serial))
-        .filter(|(_, serial)| is_expired_serial(*serial, &publication_timestamps, cleanup_older_than_ts))
+        .filter(|(_, serial)| is_expired_serial(*serial, &pub_ts_copy, cleanup_older_than_ts))
             .inspect(|(_, serial)| debug!("Delta {} is expired and will be deleted", serial))
         .fold(0, |acc, (path, serial)| {
+            publication_timestamps.remove(&serial);
+
             match std::fs::remove_dir_all(&path) {
                 Ok(_)    => { trace!("Directory {:?} for delta {} has been deleted", &path, &serial); acc + 1 },
                 Err(err) => { error!("Failed to cleanup delta {} path {:?}: {}", &serial, &path, err); acc },

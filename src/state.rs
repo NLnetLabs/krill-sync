@@ -62,12 +62,10 @@ pub fn load_state(state_path: &Path) -> Result<Option<State>> {
 
         // get the timestamp of the highest serial number that we have a record
         // of "publishing"
-        let last_rrdp_pub_ts = get_last_pub_time(&state.rrdp_publication_timestamps).and_then(
-            |&ts| Some(util::human_readable_secs_since_epoch(ts))
-        );
-        let last_rsync_pub_ts = get_last_pub_time(&state.rsync_publication_timestamps).and_then(
-            |&ts| Some(util::human_readable_secs_since_epoch(ts))
-        );
+        let last_rrdp_pub_ts = get_last_pub_time(&state.rrdp_publication_timestamps).map(
+            |&ts| util::human_readable_secs_since_epoch(ts));
+        let last_rsync_pub_ts = get_last_pub_time(&state.rsync_publication_timestamps).map(
+            |&ts| util::human_readable_secs_since_epoch(ts));
         debug!("State loaded: uri: {:?}, last serial: {}, last RRDP publication: {:?}, last Rsync publication: {:?}",
             state.notify_uri, state.notify_serial, last_rrdp_pub_ts, last_rsync_pub_ts);
 
