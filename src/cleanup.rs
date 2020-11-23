@@ -261,11 +261,10 @@ pub fn cleanup_deltas(
         .filter(|(_, serial)| is_expired_serial(*serial, &publication_timestamps, cleanup_older_than_ts))
             .inspect(|(_, serial)| debug!("Delta {} is expired and will be deleted", serial))
         .fold(0, |acc, (path, serial)| {
-            let add = match std::fs::remove_dir_all(&path) {
-                Ok(_)    => { trace!("Directory {:?} for delta {} has been deleted", &path, &serial); 1 },
-                Err(err) => { error!("Failed to cleanup delta {} path {:?}: {}", &serial, &path, err); 0 },
-            };
-            acc + add
+            match std::fs::remove_dir_all(&path) {
+                Ok(_)    => { trace!("Directory {:?} for delta {} has been deleted", &path, &serial); acc + 1 },
+                Err(err) => { error!("Failed to cleanup delta {} path {:?}: {}", &serial, &path, err); acc },
+            }
         });
 
         if num_cleaned > 0 {
