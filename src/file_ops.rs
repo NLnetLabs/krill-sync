@@ -44,7 +44,9 @@ fn install_using_moves(
     let old_extension = keep_with_extension.unwrap_or_else(|| config::OLD_FILE_EXT.to_string());
 
     let old_path_str = {
-        let old_path_str = format!("{}.{}", &final_path.to_string_lossy(), old_extension);
+        let final_path_str = final_path.to_string_lossy();
+        let final_path_str = final_path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
+        let old_path_str = format!("{}.{}", &final_path_str, old_extension);
         let old_path = Path::new(&old_path_str);
 
         // The destination for the current data that will be moved out of the way to
