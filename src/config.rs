@@ -39,16 +39,15 @@ pub const DEFAULT_STATE_DIR: &str = concat!("/var/lib/", crate_name!());
 
 arg_enum!{
     #[derive(PartialEq, Debug)]
-    #[allow(clippy::upper_case_acronyms)]
     pub enum Format {
-        BOTH,
-        RRDP,
-        RSYNC
+        Both,
+        Rrdp,
+        Rsync
     }
 }
 
 impl Default for Format {
-    fn default() -> Self { Format::BOTH }
+    fn default() -> Self { Format::Both }
 }
 
 trait Replace {
