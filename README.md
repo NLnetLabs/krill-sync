@@ -4,13 +4,13 @@ An *experimental* tool to synchronize an RRDP and/or Rsync server with a "hidden
 
 ## TL;DR
 
-For Ubuntu 20.04:
+For Ubuntu 20.04 with Rust 1.51.0:
 
 ```
 $ apt update && apt install -y build-essential curl libssl-dev openssl pkg-config
 $ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 $ source $HOME/.cargo/env
-$ cargo install --git https://github.com/NLnetLabs/krill-sync.git --tag v0.1.0
+$ cargo install --git https://github.com/NLnetLabs/krill-sync.git --tag v0.1.2 --locked
 $ krill-sync https://<hidden fqdn of RRDP publication point>/rrdp/notification.xml -v
 ...
 ```
