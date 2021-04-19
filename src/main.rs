@@ -21,11 +21,11 @@ use anyhow::{anyhow, Result};
 use routinator::rpki::rrdp::UriAndHash;
 
 fn is_rrdp_format_enabled(opt: &Opt) -> bool {
-    opt.format == Format::BOTH || opt.format == Format::RRDP
+    opt.format == Format::Both || opt.format == Format::Rrdp
 }
 
 fn is_rsync_format_enabled(opt: &Opt) -> bool {
-    opt.format == Format::BOTH || opt.format == Format::RSYNC
+    opt.format == Format::Both || opt.format == Format::Rsync
 }
 
 fn warn_about_unexpected_etag_values(

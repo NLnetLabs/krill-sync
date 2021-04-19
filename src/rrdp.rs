@@ -207,7 +207,7 @@ pub fn fix_uri(uri: &Https, new_authority: &str) -> Result<Https, routinator::rp
     Https::from_string(uri.to_string().replace(uri.authority(), &new_authority))
 }
 
-fn parse_delta<'a>(snapshot: &'a mut SnapshotParser, buf: &[u8]) -> Result<()> {
+fn parse_delta(snapshot: &mut SnapshotParser, buf: &[u8]) -> Result<()> {
     let cursor = std::io::Cursor::new(buf);
     let reader = BufReader::new(cursor);
     let mut processor = DeltaParser::new(snapshot);

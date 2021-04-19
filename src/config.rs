@@ -40,22 +40,22 @@ pub const DEFAULT_STATE_DIR: &str = concat!("/var/lib/", crate_name!());
 arg_enum!{
     #[derive(PartialEq, Debug)]
     pub enum Format {
-        BOTH,
-        RRDP,
-        RSYNC
+        Both,
+        Rrdp,
+        Rsync
     }
 }
 
 impl Default for Format {
-    fn default() -> Self { Format::BOTH }
+    fn default() -> Self { Format::Both }
 }
 
 trait Replace {
-    fn replace(&self, from_str: &str, to: &PathBuf) -> PathBuf;
+    fn replace(&self, from_str: &str, to: &Path) -> PathBuf;
 }
 
 impl Replace for PathBuf {
-    fn replace(&self, from_str: &str, to: &PathBuf) -> PathBuf
+    fn replace(&self, from_str: &str, to: &Path) -> PathBuf
     {
         let to_str = format!("{}", to.display());
         let self_str = format!("{}", self.display());
