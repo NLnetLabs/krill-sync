@@ -1,6 +1,6 @@
 [package]
 name = "krill-sync"
-version = "0.1.1"
+version = "0.2-dev"
 authors = ["Ximon Eighteen <3304436+ximon18@users.noreply.github.com>"]
 edition = "2018"
 build = "build.rs"
