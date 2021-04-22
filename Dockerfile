@@ -32,18 +32,18 @@ RUN addgroup -g ${RUN_USER_GID} ${RUN_USER} && \
     adduser -D -u ${RUN_USER_UID} -G ${RUN_USER} ${RUN_USER}
 
 # Create the data directories and create a volume for them
+VOLUME /data
 RUN mkdir -p /data/state /datarsync /data/rrdp && \
-    chown -R ${RUNUSER_UID}:${RUN_USER_GID} /data
+    chown -R ${RUN_USER_UID}:${RUN_USER_GID} /data
 
 # Install a Docker entrypoint script that will be executed when the container
 # runs
 COPY docker/entrypoint.sh /opt/
-RUN chown ${RUN_USER}: /opt/entrypoint.sh
+RUN chown ${RUN_USER_UID}:${RUN_USER_GID} /opt/entrypoint.sh
 
 # Set default, non-existend rrdp url
 ENV RRDP_URL="https://localhost/notification.xml"
 
-VOLUME /data
 WORKDIR /tmp
 
 # Use Tini to ensure that krill-sync responds to CTRL-C when run in the
