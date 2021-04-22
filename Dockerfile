@@ -1,11 +1,8 @@
-#
-# Make the base image configurable so that the E2E test can use a base image
-# with a prepopulated Cargo build cache to accelerate the build process.
-# Use Ubuntu 16.04 because this is what the Travis CI Krill build uses.
+# Use the same alpine image for both build stages
 ARG BASE_IMG=alpine:3.13
 
 #
-# -- stage 1: build krill and krillc
+# -- stage 1: build krill-sync
 #
 FROM ${BASE_IMG} AS build
 
@@ -25,7 +22,7 @@ FROM ${BASE_IMG}
 COPY --from=build /tmp/krill_sync/target/x86_64-alpine-linux-musl/release/krill-sync /usr/local/bin/
 
 # Build variables for uid and guid of user to run container
-ARG RUN_USER=krill
+ARG RUN_USER=krill_sync
 ARG RUN_USER_UID=1012
 ARG RUN_USER_GID=1012
 
