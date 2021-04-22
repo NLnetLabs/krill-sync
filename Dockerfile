@@ -1,0 +1,53 @@
+#
+# Make the base image configurable so that the E2E test can use a base image
+# with a prepopulated Cargo build cache to accelerate the build process.
+# Use Ubuntu 16.04 because this is what the Travis CI Krill build uses.
+ARG BASE_IMG=alpine:3.13
+
+#
+# -- stage 1: build krill and krillc
+#
+FROM ${BASE_IMG} AS build
+
+RUN apk add rust cargo openssl-dev
+
+WORKDIR /tmp/krill_sync
+COPY . .
+
+RUN cargo build --target x86_64-alpine-linux-musl --release --locked
+
+#
+# -- stage 2: create an image containing just the binaries, configs &
+#             scripts needed to run Krill, and not the things needed to build
+#             it.
+#
+FROM alpine:3.12
+COPY --from=build /tmp/krill_sync/target/x86_64-alpine-linux-musl/release/krill-sync /usr/local/bin/
+
+# Build variables for uid and guid of user to run container
+ARG RUN_USER=krill
+ARG RUN_USER_UID=1012
+ARG RUN_USER_GID=1012
+
+RUN apk add bash libgcc openssl tzdata util-linux
+
+RUN addgroup -g ${RUN_USER_GID} ${RUN_USER} && \
+    adduser -D -u ${RUN_USER_UID} -G ${RUN_USER} ${RUN_USER}
+
+# Create the data directories and create a volume for them
+RUN mkdir -p /data/state /datarsync /data/rrdp && \
+    chown -R ${RUNUSER_UID}:${RUN_USER_GID} /data
+
+# Set default, non-existend rrdp url
+ENV RRDP_URL="https://localhost/notification.xml"
+
+VOLUME /data
+WORKDIR /tmp
+
+# Use Tini to ensure that krill-sync responds to CTRL-C when run in the
+# foreground without the Docker argument "--init" (which is actually another
+# way of activating Tini, but cannot be enabled from inside the Docker image).
+RUN apk add --no-cache tini
+# Tini is now available at /sbin/tini
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/krill-sync"]
+CMD ["--rrdp-dir", "/data/rrdp", "--rsync-dir", "/data/rsync", "--state-dir", "/data/state", "$RRDP_URL"]
