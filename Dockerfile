@@ -21,7 +21,7 @@ RUN cargo build --target x86_64-alpine-linux-musl --release --locked
 #             scripts needed to run Krill, and not the things needed to build
 #             it.
 #
-FROM alpine:3.12
+FROM ${BASE_IMG}
 COPY --from=build /tmp/krill_sync/target/x86_64-alpine-linux-musl/release/krill-sync /usr/local/bin/
 
 # Build variables for uid and guid of user to run container
@@ -38,6 +38,11 @@ RUN addgroup -g ${RUN_USER_GID} ${RUN_USER} && \
 RUN mkdir -p /data/state /datarsync /data/rrdp && \
     chown -R ${RUNUSER_UID}:${RUN_USER_GID} /data
 
+# Install a Docker entrypoint script that will be executed when the container
+# runs
+COPY docker/entrypoint.sh /opt/
+RUN chown ${RUN_USER}: /opt/entrypoint.sh
+
 # Set default, non-existend rrdp url
 ENV RRDP_URL="https://localhost/notification.xml"
 
@@ -48,6 +53,8 @@ WORKDIR /tmp
 # foreground without the Docker argument "--init" (which is actually another
 # way of activating Tini, but cannot be enabled from inside the Docker image).
 RUN apk add --no-cache tini
+
+# Run as ${RUN_USER} - not root
+USER ${RUN_USER}
 # Tini is now available at /sbin/tini
-ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/krill-sync"]
-CMD ["--rrdp-dir", "/data/rrdp", "--rsync-dir", "/data/rsync", "--state-dir", "/data/state", "$RRDP_URL"]
+CMD ["/sbin/tini", "--", "/opt/entrypoint.sh"]
