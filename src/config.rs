@@ -1,9 +1,9 @@
-use crate::lock;
 use crate::http::Https;
+use crate::lock;
 
 use anyhow::{anyhow, Result};
 use log::LevelFilter;
-use structopt::clap::{crate_name, crate_version, arg_enum};
+use structopt::clap::{arg_enum, crate_name, crate_version};
 use structopt::StructOpt;
 
 use std::path::{Path, PathBuf};
@@ -30,6 +30,10 @@ pub const DEFAULT_PID_FILE_PATH: &str = concat!("/var/run/", crate_name!(), ".pi
 /// The default location in which to store RRDP repository files.
 pub const DEFAULT_RRDP_DIR: &str = concat!("/var/lib/", crate_name!(), "/rrdp");
 
+/// Time to wait with publishing a new RRDP notify after the snapshot and deltas
+/// have been written.
+pub const DEFAULT_RRDP_NOTIFY_DELAY_SECONDS: &str = "0";
+
 /// The default location in which to store Rsync repository files.
 pub const DEFAULT_RSYNC_DIR: &str = concat!("/var/lib/", crate_name!(), "/rsync");
 
@@ -37,7 +41,7 @@ pub const DEFAULT_RSYNC_DIR: &str = concat!("/var/lib/", crate_name!(), "/rsync"
 /// See: https://www.pathname.com/fhs/pub/fhs-2.3.html#VARLIBVARIABLESTATEINFORMATION
 pub const DEFAULT_STATE_DIR: &str = concat!("/var/lib/", crate_name!());
 
-arg_enum!{
+arg_enum! {
     #[derive(PartialEq, Debug)]
     pub enum Format {
         Both,
@@ -47,7 +51,9 @@ arg_enum!{
 }
 
 impl Default for Format {
-    fn default() -> Self { Format::Both }
+    fn default() -> Self {
+        Format::Both
+    }
 }
 
 trait Replace {
@@ -55,8 +61,7 @@ trait Replace {
 }
 
 impl Replace for PathBuf {
-    fn replace(&self, from_str: &str, to: &Path) -> PathBuf
-    {
+    fn replace(&self, from_str: &str, to: &Path) -> PathBuf {
         let to_str = format!("{}", to.display());
         let self_str = format!("{}", self.display());
         PathBuf::from(self_str.replace(&from_str, &to_str))
@@ -71,7 +76,12 @@ impl Replace for PathBuf {
 pub struct Opt {
     // The number of occurrences of the `v/verbose` flag
     /// Verbose mode (-v, -vv, -vvv, etc.)
-    #[structopt(short = "v", long = "verbose", parse(from_occurrences), conflicts_with = "quiet")]
+    #[structopt(
+        short = "v",
+        long = "verbose",
+        parse(from_occurrences),
+        conflicts_with = "quiet"
+    )]
     pub verbose: u8,
 
     /// Quiet mode (no warnings or informative messages, only errors)
@@ -102,6 +112,10 @@ pub struct Opt {
     #[structopt(long = "rrdp-dir", parse(from_os_str), default_value = DEFAULT_RRDP_DIR)]
     pub rrdp_dir: PathBuf,
 
+    /// Delay seconds before writing the notification.xml file
+    #[structopt(long = "rrdp-notify-delay", value_name = "seconds", default_value = DEFAULT_RRDP_NOTIFY_DELAY_SECONDS)]
+    pub rrdp_notify_delay: u64,
+
     /// The directory to write Rsync files to
     #[structopt(long = "rsync-dir", parse(from_os_str), default_value = DEFAULT_RSYNC_DIR)]
     pub rsync_dir: PathBuf,
@@ -119,7 +133,11 @@ pub struct Opt {
     pub notification_uri: Https,
 }
 
-fn log_without_target(out: fern::FormatCallback, message: &std::fmt::Arguments, record: &log::Record) {
+fn log_without_target(
+    out: fern::FormatCallback,
+    message: &std::fmt::Arguments,
+    record: &log::Record,
+) {
     out.finish(format_args!(
         "{} {}: {}",
         chrono::Local::now().format("%Y/%m/%d %H:%M:%S"),
@@ -145,8 +163,8 @@ pub fn configure() -> Result<Opt> {
         (LevelFilter::Error, LevelFilter::Error)
     } else {
         match opt.verbose {
-            0 => (LevelFilter::Warn,  LevelFilter::Warn),
-            1 => (LevelFilter::Info,  LevelFilter::Warn),
+            0 => (LevelFilter::Warn, LevelFilter::Warn),
+            1 => (LevelFilter::Info, LevelFilter::Warn),
             2 => (LevelFilter::Debug, LevelFilter::Warn),
             3 => (LevelFilter::Trace, LevelFilter::Warn),
             4 => (LevelFilter::Trace, LevelFilter::Info),
@@ -172,7 +190,9 @@ pub fn configure() -> Result<Opt> {
         return Err(anyhow!(
             "Failed to create lock file {:?}: {} (tip: use --pid-file to \
             change the location of the lock file) ",
-            &opt.pid_file, err));
+            &opt.pid_file,
+            err
+        ));
     }
 
     // Ensure the lock file is removed even if we are killed by SIGINT or SIGTERM
@@ -181,7 +201,8 @@ pub fn configure() -> Result<Opt> {
         error!("CTRL-C caught, aborting.");
         lock::unlock(&unlock_pid_file).unwrap();
         std::process::exit(1);
-    }).expect("Error setting Ctrl-C handler");
+    })
+    .expect("Error setting Ctrl-C handler");
 
     // If --state-dir was changed from the default, ensure that --rrdp-dir and
     // --rsync-dir follow the change if their defaults were not overriden. This

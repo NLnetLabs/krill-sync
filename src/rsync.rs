@@ -1,14 +1,15 @@
-use crate::state::RrdpSerialNumber;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use anyhow::{anyhow, Result};
+use chrono::Utc;
+use routinator::rpki::uri;
+
 use crate::config::{self, Opt};
 use crate::file_ops;
 use crate::http::HttpClient;
 use crate::rrdp::NotificationFile;
-
-use anyhow::{anyhow, Result};
-use routinator::rpki::uri;
-
-use std::path::PathBuf;
-use std::str::FromStr;
+use crate::state::RrdpSerialNumber;
 
 fn make_rsync_repo_path(uri: &uri::Rsync) -> Result<PathBuf, std::convert::Infallible> {
     // Drop the module as the proper module name is determined by and part of
@@ -23,23 +24,51 @@ pub fn build_repo_from_rrdp_snapshot(
     notify: &mut NotificationFile,
     client: &HttpClient,
     raw_snapshot: &[u8],
-    last_serial: RrdpSerialNumber) -> Result<()>
-{
+    last_serial: RrdpSerialNumber,
+) -> Result<()> {
     info!("Updating Rsync repository");
 
-    let tmp_out_path = file_ops::set_path_ext(&opt.rsync_dir, config::TMP_FILE_EXT);
-    client.snapshot_from_buf(
-        &notify,
-        |uri| {
-            let this_out_path = tmp_out_path.join(make_rsync_repo_path(&uri).unwrap());
-            trace!("Writing Rsync file {:?}", &this_out_path);
-            this_out_path
-        },
-        &raw_snapshot)
-    .map_err(|err| anyhow!("Error updating Rsync repository: {:?}", &err))?;
+    let out_path = if cfg!(unix) {
+        let extension = format!("{}_{}", last_serial, Utc::now().timestamp());
+        file_ops::set_path_ext(&opt.rsync_dir, &extension)
+    } else {
+        file_ops::set_path_ext(&opt.rsync_dir, config::TMP_FILE_EXT)
+    };
 
-    info!("Performing atomic update of the Rsync repository");
-    file_ops::install_new_dir(&opt.rsync_dir, last_serial.to_string())?;
+    info!(
+        "Writing Rsync repository to: {}",
+        out_path.to_string_lossy()
+    );
+    write_rsync_content(&out_path, notify, client, raw_snapshot)?;
 
+    if cfg!(unix) {
+        use std::os::unix::fs;
+        info!("Use symlink to link rsync module dir to the new content");
+        fs::symlink(&out_path, &opt.rsync_dir)?;
+    } else {
+        info!("Renaming rsync folders for close to atomic update of the rsync module dir");
+        file_ops::install_new_dir(&opt.rsync_dir, last_serial.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn write_rsync_content(
+    out_path: &Path,
+    notify: &mut NotificationFile,
+    client: &HttpClient,
+    raw_snapshot: &[u8],
+) -> Result<()> {
+    client
+        .snapshot_from_buf(
+            &notify,
+            |uri| {
+                let this_out_path = out_path.join(make_rsync_repo_path(&uri).unwrap());
+                trace!("Writing Rsync file {:?}", &this_out_path);
+                this_out_path
+            },
+            &raw_snapshot,
+        )
+        .map_err(|err| anyhow!("Error updating Rsync repository: {:?}", &err))?;
     Ok(())
 }
