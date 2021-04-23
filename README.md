@@ -1,6 +1,6 @@
 # krill-sync
 
-An *experimental* tool to synchronize an RRDP and/or Rsync server with a "hidden" remote [RFC 8182](https://tools.ietf.org/html/rfc8182) RRDP publication point. _**Note:** currently only tested with and makes assumptions specific to [Krill](https://nlnetlabs.nl/projects/rpki/krill/)._
+A tool to synchronize an RRDP and/or Rsync server with a "hidden" remote [RFC 8182](https://tools.ietf.org/html/rfc8182) RRDP publication point. _**Note:** currently only tested with and makes assumptions specific to [Krill](https://nlnetlabs.nl/projects/rpki/krill/)._
 
 ## TL;DR
 
