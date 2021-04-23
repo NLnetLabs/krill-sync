@@ -61,7 +61,7 @@ extended-description-file = "debian/description.txt"
 license-file = ["LICENSE", "0"]
 depends = ""
 maintainer-scripts = "debian/"
-changelog = "Changelog"
+changelog = "debian/changelog" # build by pkg.yml
 copyright = "Copyright (c) 2021, NLnet Labs. All rights reserved."
 assets = [
     ["target/release/krill-sync", "/usr/bin/krill-sync", "755"],
