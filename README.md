@@ -49,6 +49,26 @@ If new data is available the RRDP deltas will be used to update the local RRDP s
 
 The Notification File is always written to disk last.
 
+### Usage with docker
+
+The following environment variables exist:
+  * `FORMAT`: `Rsync|RRDP|Both`, defaults to `Both`
+  * `DATA`: path for data, defaults to `/data`
+  * `RRDP_DIR`: path for RRDP data, defaults to `${DATA}/rrdp`
+  * `RSYNC_DIR`: path for rsync data, defaults to `${DATA}/rsync`
+  * `STATE_DIR`: path for state, defaults to `${DATA}/state`
+
+```
+# Build the image and tag it
+docker build . -t krill-sync
+# Create data directory
+mkdir /tmp/data && sudo chown 1012 /tmp/data
+# Run one-shot
+docker run -v /tmp/data:/data --rm \
+    -e RRDP_URL="https://rrdp.rpki.nlnetlabs.nl/rrdp/notification.xml" \
+    krill-sync
+```
+
 ## Advanced Usage
 
 If needed the directories in which internal state and repository output are stored can be specified, and for servers that serve only RRDP or Rsync but not both it the output can be constrained to just the required format _(though the protocol used between krill-sync and the upstream RRDP server is always RRDP)_.
