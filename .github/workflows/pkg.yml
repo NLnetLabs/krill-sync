@@ -223,7 +223,7 @@ jobs:
           - 'debian:bullseye' # debian/11
         mode:
           - 'fresh-install'
-          - 'upgrade-from-published'
+          # - 'upgrade-from-published' # There is no previous yet
         exclude:
           - image: 'debian:bullseye'
             mode: 'upgrade-from-published'
