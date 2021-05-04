@@ -25,6 +25,7 @@ COPY --from=build /tmp/krill_sync/target/x86_64-alpine-linux-musl/release/krill-
 ARG RUN_USER=krill_sync
 ARG RUN_USER_UID=1012
 ARG RUN_USER_GID=1012
+ENV DATA=/data
 
 RUN apk add bash libgcc openssl tzdata util-linux
 
@@ -32,9 +33,9 @@ RUN addgroup -g ${RUN_USER_GID} ${RUN_USER} && \
     adduser -D -u ${RUN_USER_UID} -G ${RUN_USER} ${RUN_USER}
 
 # Create the data directories and create a volume for them
-VOLUME /data
-RUN mkdir -p /data/state /datarsync /data/rrdp && \
-    chown -R ${RUN_USER_UID}:${RUN_USER_GID} /data
+VOLUME ${DATA}
+RUN mkdir -p ${DATA}/state ${DATA}/rsync ${DATA}/rrdp && \
+    chown -R ${RUN_USER_UID}:${RUN_USER_GID} ${DATA}
 
 # Install a Docker entrypoint script that will be executed when the container
 # runs
