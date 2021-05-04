@@ -1,3 +1,5 @@
 Dockerfile
 /target
+/data
+./data
 .git
