@@ -96,6 +96,10 @@ pub struct Opt {
     #[structopt(long = "force-update")]
     pub force_update: bool,
 
+    /// Include authority and module in rsync path (<rsync_dir>/rpki.example.org/respository/..)
+    #[structopt(long = "full-rsync-path")]
+    pub full_rsync_path: bool,
+
     /// Output both RRDP and Rsync style repositories or only one of them?
     #[structopt(long = "format", short = "f", default_value, possible_values(&Format::variants()), case_insensitive = true )]
     pub format: Format,

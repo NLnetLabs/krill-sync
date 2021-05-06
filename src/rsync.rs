@@ -11,7 +11,25 @@ use crate::http::HttpClient;
 use crate::rrdp::NotificationFile;
 use crate::state::RrdpSerialNumber;
 
-fn make_rsync_repo_path(uri: &uri::Rsync) -> Result<PathBuf, std::convert::Infallible> {
+fn authority_module_rsync_repo_path(uri: &uri::Rsync) -> Result<PathBuf, std::convert::Infallible> {
+    // Include the module and authority in the rsync path.
+    // rsyncd should be set up to use the proper rsync path, e.g.
+    // [repository]
+    // path = /data/rsync/rpki.example.org/repository
+    // read only = true
+    // list = true
+    let authority = PathBuf::from_str(uri.module().authority());
+    let module = PathBuf::from_str(uri.module().module());
+    let path = PathBuf::from_str(uri.path());
+
+    // TODO: validate that the following checks for path injection done:
+    // authority/module starts with authority/
+    // authority/module/path starts with authority/module/
+
+    Ok(authority?.join(module?).join(path?))
+}
+
+fn path_only_rsync_repo_path(uri: &uri::Rsync) -> Result<PathBuf, std::convert::Infallible> {
     // Drop the module as the proper module name is determined by and part of
     // the rsyncd configuration and thus the user invoking krill-sync should
     // ensure that they direct krill-sync to write the rsync files out to the
@@ -39,7 +57,7 @@ pub fn build_repo_from_rrdp_snapshot(
         "Writing Rsync repository to: {}",
         out_path.to_string_lossy()
     );
-    write_rsync_content(&out_path, notify, client, raw_snapshot)?;
+    write_rsync_content(&opt, &out_path, notify, client, raw_snapshot)?;
 
     if cfg!(unix) {
         info!(
@@ -59,16 +77,19 @@ pub fn build_repo_from_rrdp_snapshot(
 }
 
 fn write_rsync_content(
+    opt: &Opt,
     out_path: &Path,
     notify: &mut NotificationFile,
     client: &HttpClient,
     raw_snapshot: &[u8],
 ) -> Result<()> {
+    let path_fn = if opt.full_rsync_path { authority_module_rsync_repo_path } else { path_only_rsync_repo_path };
+
     client
         .snapshot_from_buf(
             &notify,
             |uri| {
-                let this_out_path = out_path.join(make_rsync_repo_path(&uri).unwrap());
+                let this_out_path = out_path.join(path_fn(&uri).unwrap());
                 trace!("Writing Rsync file {:?}", &this_out_path);
                 this_out_path
             },
@@ -76,4 +97,21 @@ fn write_rsync_content(
         )
         .map_err(|err| anyhow!("Error updating Rsync repository: {:?}", &err))?;
     Ok(())
+}
+
+//============ Tests =========================================================
+
+#[cfg(test)]
+#[test]
+fn paths_are_appended() {
+    let uri = uri::Rsync::from_string("rsync://rpki.example.org/repo/main.crl".into()).unwrap();
+
+    assert_eq!(
+        authority_module_rsync_repo_path(&uri),
+        PathBuf::from_str("rpki.example.org/repo/main.crl")
+    );
+    assert_eq!(
+        path_only_rsync_repo_path(&uri),
+        PathBuf::from_str("main.crl")
+    );
 }
