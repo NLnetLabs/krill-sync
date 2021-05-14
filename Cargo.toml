@@ -1,9 +1,14 @@
 [package]
 name = "krill-sync"
 version = "0.2-dev"
-authors = ["Ximon Eighteen <3304436+ximon18@users.noreply.github.com>"]
+license = "BSD-3-Clause"
 edition = "2018"
 build = "build.rs"
+authors = [ "The NLnet Labs RPKI team <rpki-team@nlnetlabs.nl>" ]
+description = "A tool to synchronize an RRDP and/or Rsync server with a remote RFC 8182 RRDP publication point."
+repository = "https://github.com/NLnetLabs/krill-sync"
+keywords = ["rpki", "routing-security", "bgp"]
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.32"
@@ -32,3 +37,49 @@ features = [ "native-tls", "socks" ]
 [build-dependencies]
 rustc_version = "0.2.3"
 vergen = "3.1.0"
+
+
+# ------------------------------------------------------------------------------
+# START DEBIAN PACKAGING
+#
+# Configurations for the cargo-deb cargo plugin which builds Debian packages in
+# target/debian/ when invoked with: cargo deb. 
+#
+# TODO:
+# - Build packages with GH Actions
+# - Add man page?
+# - Add changelog
+#
+# NOTE:
+# - There is a single binary only (no daemon yet)
+
+[package.metadata.deb]
+name = "krill-sync"
+priority = "optional"
+section = "net"
+extended-description-file = "debian/description.txt"
+license-file = ["LICENSE", "0"]
+depends = ""
+maintainer-scripts = "debian/"
+changelog = "debian/changelog" # build by pkg.yml
+copyright = "Copyright (c) 2021, NLnet Labs. All rights reserved."
+assets = [
+    ["target/release/krill-sync", "/usr/bin/krill-sync", "755"],
+]
+
+# List target variants
+
+[package.metadata.deb.variants.ubuntu-xenial]
+
+[package.metadata.deb.variants.ubuntu-bionic]
+
+[package.metadata.deb.variants.ubuntu-focal]
+
+[package.metadata.deb.variants.debian-stretch]
+
+[package.metadata.deb.variants.debian-buster]
+
+[package.metadata.deb.variants.debian-bullseye]
+
+# END DEBIAN PACKAGING
+# ------------------------------------------------------------------------------

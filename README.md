@@ -1,6 +1,6 @@
 # krill-sync
 
-An *experimental* tool to synchronize an RRDP and/or Rsync server with a "hidden" remote [RFC 8182](https://tools.ietf.org/html/rfc8182) RRDP publication point. _**Note:** currently only tested with and makes assumptions specific to [Krill](https://nlnetlabs.nl/projects/rpki/krill/)._
+A tool to synchronize an RRDP and/or Rsync server with a "hidden" remote [RFC 8182](https://tools.ietf.org/html/rfc8182) RRDP publication point. _**Note:** currently only tested with and makes assumptions specific to [Krill](https://nlnetlabs.nl/projects/rpki/krill/)._
 
 ## TL;DR
 
@@ -48,6 +48,26 @@ On a subsequent run where no new data is available no changes will be made, with
 If new data is available the RRDP deltas will be used to update the local RRDP snapshot and delta files and then the Rsync files.
 
 The Notification File is always written to disk last.
+
+### Usage with docker
+
+The following environment variables exist:
+  * `FORMAT`: `Rsync|RRDP|Both`, defaults to `Both`
+  * `DATA`: path for data, defaults to `/data`
+  * `RRDP_DIR`: path for RRDP data, defaults to `${DATA}/rrdp`
+  * `RSYNC_DIR`: path for rsync data, defaults to `${DATA}/rsync`
+  * `STATE_DIR`: path for state, defaults to `${DATA}/state`
+
+```
+# Build the image and tag it
+docker build . -t krill-sync
+# Create data directory
+mkdir /tmp/data && sudo chown 1012 /tmp/data
+# Run one-shot
+docker run -v /tmp/data:/data --rm \
+    -e RRDP_URL="https://rrdp.rpki.nlnetlabs.nl/rrdp/notification.xml" \
+    krill-sync
+```
 
 ## Advanced Usage
 
