@@ -42,7 +42,10 @@ pub fn build_repo_from_rrdp_snapshot(
     write_rsync_content(&out_path, notify, client, raw_snapshot)?;
 
     if cfg!(unix) {
-        info!("Use symlink to link rsync module dir to the new content");
+        info!(
+            "Using symlink to link rsync module dir to the new content in {}",
+            out_path.to_string_lossy()
+        );
         // create a new symlink then rename it
         let tmp_name = file_ops::set_path_ext(&opt.rsync_dir, config::TMP_FILE_EXT);
         std::os::unix::fs::symlink(&out_path, &tmp_name)?;

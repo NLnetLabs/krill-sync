@@ -264,7 +264,7 @@ fn try_main() -> Result<()> {
                 &mut notify,
                 &rrdp_http_client,
                 &raw_snapshot,
-                state.notify_serial,
+                new_state.notify_serial,
             )?;
 
             let seconds_since_epoch = Utc::now().timestamp();
