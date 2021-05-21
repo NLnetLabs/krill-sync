@@ -17,12 +17,16 @@ fn is_expired_serial(
     publication_timestamps: &PublicationTimestamps,
     expiration_time: SecondsSinceEpoch) -> bool
 {
-    // An RRDP serial is "expired" if the RRDP 8182 Notification File by the
-    // same serial number, or a later Notification File, was published by us
-    // more than expiration_time seconds ago.
-    publication_timestamps.iter().any(|(pub_serial, pub_ts)| {
-        *pub_serial >= serial && *pub_ts < expiration_time
-    })
+    // An RRDP serial is "expired" if its RRDP 8182 Notification File
+    // was published by us more than expiration_time seconds ago, and
+    // a newer publication exists.
+    if let Some(serial_pub_ts) = publication_timestamps.get(&serial) {
+        *serial_pub_ts < expiration_time &&
+            publication_timestamps.iter().any(|(_, pub_ts)| *pub_ts > *serial_pub_ts)
+    } else {
+        // Untracked in our state, don't bother
+        false
+    }
 }
 
 fn is_snapshot_file(entry: &DirEntry) -> Option<(PathBuf, RrdpSerialNumber)> {
