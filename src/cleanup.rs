@@ -200,7 +200,6 @@ pub fn cleanup_notification_files(
 pub fn cleanup_rsync_dirs(
     path_to_cleanup: &Path,
     cleanup_older_than_ts: SecondsSinceEpoch,
-    last_serial: RrdpSerialNumber,
     publication_timestamps: &mut PublicationTimestamps) -> Result<()>
 {
     debug!("Remove old rsync directory backups published before {}",
@@ -213,8 +212,6 @@ pub fn cleanup_rsync_dirs(
             let num_cleaned = WalkDir::new(&parent).max_depth(1).into_iter()
                 .filter_map(|e| is_rsync_backup_dir(&e.unwrap(), path_to_cleanup))
                     .inspect(|(path, serial)| trace!("Found rsync backup dir for serial {}: {:?}", serial, path))
-                .filter(|(_, serial)| is_old_serial(*serial, last_serial))
-                    .inspect(|(_, serial)| trace!("Serial {} is old", serial))
                 .filter(|(_, serial)| is_expired_serial(*serial, &pub_ts_copy, cleanup_older_than_ts))
                     .inspect(|(_, serial)| debug!("Rsync backup for serial {} is expired and will be deleted", serial))
                 .fold(0, |acc, (path, serial)| {

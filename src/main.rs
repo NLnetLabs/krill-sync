@@ -136,7 +136,6 @@ fn try_main() -> Result<()> {
     cleanup::cleanup_rsync_dirs(
         &opt.rsync_dir,
         cleanup_older_than_ts,
-        state.notify_serial,
         &mut new_state.rsync_publication_timestamps,
     )?;
 
