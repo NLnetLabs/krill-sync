@@ -1,12 +1,13 @@
-use crate::http::Https;
-use crate::lock;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use log::LevelFilter;
 use structopt::clap::{arg_enum, crate_name, crate_version};
 use structopt::StructOpt;
 
-use std::path::{Path, PathBuf};
+use rpki::uri::Https;
+
+use crate::fetch::{FetchMap, FetchSource};
 
 pub const DELTA_FNAME: &str = "delta.xml";
 pub const NOTIFICATION_FNAME: &str = "notification.xml";
@@ -73,7 +74,7 @@ impl Replace for PathBuf {
     about = "A tool to synchronize an RRDP and/or Rsync server with a remote RRDP publication point.",
     long_version = concat!(crate_version!(), " (", env!("VERGEN_SHA_SHORT"), ")"),
 )]
-pub struct Opt {
+pub struct Config {
     // The number of occurrences of the `v/verbose` flag
     /// Verbose mode (-v, -vv, -vvv, etc.)
     #[structopt(
@@ -120,6 +121,9 @@ pub struct Opt {
     #[structopt(long = "rsync-dir", parse(from_os_str), default_value = DEFAULT_RSYNC_DIR)]
     pub rsync_dir: PathBuf,
 
+    #[structopt(long = "rsync-dir-force-moves")]
+    pub rsync_dir_force_moves: bool,
+
     /// The minimum number of seconds that a dangling snapshot or delta must have been published by krill-sync before it can be removed
     #[structopt(long = "cleanup-after", value_name = "seconds", default_value = DEFAULT_CLEANUP_SECONDS)]
     pub cleanup_after: i64,
@@ -131,6 +135,148 @@ pub struct Opt {
 
     /// The RRDP notification file URI of the Krill instance to sync with
     pub notification_uri: Https,
+
+    /// An optional mapping of the notification file URI path up to the parent directory of
+    /// the notification file itself, to a different base URI / path on disk.
+    ///
+    /// Note: For Krill and RIPE NCC - snapshots and deltas can always be found in subdirectories
+    ///        **under** the base dir of the notification file. However, we may want to revisit this
+    ///        configuration in future to allow for explicit mapping of multiple URI paths.
+    #[structopt(long = "source_uri_base", value_name = "alternate fetch base uri or dir for notification uri")]
+    pub source_uri_base: Option<FetchSource>,
+
+    #[structopt(skip)]
+    pub fetch_map: Option<FetchMap>,
+}
+
+impl Config {
+    pub fn rsync_enabled(&self) -> bool {
+        self.format == Format::Both || self.format == Format::Rsync
+    }
+
+    pub fn rrdp_enabled(&self) -> bool {
+        self.format == Format::Both || self.format == Format::Rrdp
+    }
+
+    pub fn rsync_dir_use_symlinks(&self) -> bool {
+        if cfg!(unix) {
+            !self.rsync_dir_force_moves
+        } else {
+            false
+        }
+    }
+}
+
+pub fn configure() -> Result<Config> {
+    let config = Config::from_args();
+    post_configure(config)
+}
+
+#[cfg(test)]
+pub fn create_test_config(
+    work_dir: &Path,
+    notification_uri: Https,
+    source_uri_base: &str
+) -> Config {
+
+    let source_uri_base = FetchSource::File(PathBuf::from(source_uri_base));
+
+    let state_dir = work_dir.join("state");
+    let rrdp_dir = work_dir.join("rrdp");
+    let rsync_dir = work_dir.join("rsync");
+    let pid_file = work_dir.join("krill-sync.pid");
+
+    let config = Config {
+        verbose: 0,
+        quiet: false,
+        force_snapshot: false,
+        force_update: false,
+        format: Format::Both,
+        pid_file,
+        state_dir,
+        rrdp_dir,
+        rrdp_notify_delay: 0,
+        rsync_dir,
+        rsync_dir_force_moves: false,
+        cleanup_after: 0,
+        insecure: false,
+        notification_uri,
+        source_uri_base: Some(source_uri_base),
+        fetch_map: None, // will be set in post_configure
+    };
+    post_configure(config).unwrap()
+}
+
+pub fn post_configure(mut config: Config) -> Result<Config> {
+    initialize_logging(&config);
+
+    let base_uri = config.notification_uri.parent().ok_or_else(||
+        anyhow!("Notification URI should contain a path to a file")
+    )?;
+
+    if let Some(base_fetch) = config.source_uri_base.as_ref().cloned() {
+        if ! base_fetch.is_dir() {
+            return Err(anyhow!("source_uri_dir is not a readable dir or base path ending in a slash"));
+        } else {
+            config.fetch_map = Some(FetchMap::new(base_uri, base_fetch))
+        }
+    }
+
+    // If --state-dir was changed from the default, ensure that --rrdp-dir and
+    // --rsync-dir follow the change if their defaults were not overridden. This
+    // is a bit more complicated than I would like but this way --help shows the
+    // default values correctly without needing to specify them multiple times,
+    // and with structopt I don't think I can get to the underlying clap matches
+    // to find out if the args were specified (by checking the number of
+    // occurrences).
+    if config.state_dir != Path::new(DEFAULT_STATE_DIR) {
+        if config.rrdp_dir == Path::new(DEFAULT_RRDP_DIR) {
+            config.rrdp_dir = config.rrdp_dir.replace(DEFAULT_STATE_DIR, &config.state_dir);
+        }
+        if config.rsync_dir == Path::new(DEFAULT_RSYNC_DIR) {
+            config.rsync_dir = config.rsync_dir.replace(DEFAULT_STATE_DIR, &config.state_dir);
+        }
+    }
+
+    if config.force_snapshot {
+        info!("Note: --force-snapshot=true: Snapshot download has been forced. RRDP deltas will not be used to accelerate snapshot syncing.")
+    }
+    if config.force_update {
+        info!("Note: --force-update=true: Update will be forced even if upstream RRDP content is unchanged.")
+    }
+
+    Ok(config)
+}
+
+fn initialize_logging(config: &Config) {
+    let (ks_log_level, other_log_level) = if config.quiet {
+        (LevelFilter::Error, LevelFilter::Error)
+    } else {
+        match config.verbose {
+            0 => (LevelFilter::Warn, LevelFilter::Warn),
+            1 => (LevelFilter::Info, LevelFilter::Warn),
+            2 => (LevelFilter::Debug, LevelFilter::Warn),
+            3 => (LevelFilter::Trace, LevelFilter::Warn),
+            4 => (LevelFilter::Trace, LevelFilter::Info),
+            5 => (LevelFilter::Trace, LevelFilter::Debug),
+            _ => (LevelFilter::Trace, LevelFilter::Trace),
+        }
+    };
+
+    // ignore the result - this will only fail if logging was already initialized,
+    // and that may happen when running tests in parallel.
+    let _ = fern::Dispatch::new()
+        .format(move |out, message, record| {
+            if ks_log_level <= LevelFilter::Debug {
+                log_without_target(out, message, record)
+            } else {
+                log_with_target(out, message, record)
+            }
+        })
+        .level(other_log_level)
+        .level_for("krill_sync", ks_log_level)
+        .chain(std::io::stdout())
+        .apply();
 }
 
 fn log_without_target(
@@ -154,78 +300,4 @@ fn log_with_target(out: fern::FormatCallback, message: &std::fmt::Arguments, rec
         record.target(),
         message,
     ))
-}
-
-pub fn configure() -> Result<Opt> {
-    let mut opt = Opt::from_args();
-
-    let (ks_log_level, other_log_level) = if opt.quiet {
-        (LevelFilter::Error, LevelFilter::Error)
-    } else {
-        match opt.verbose {
-            0 => (LevelFilter::Warn, LevelFilter::Warn),
-            1 => (LevelFilter::Info, LevelFilter::Warn),
-            2 => (LevelFilter::Debug, LevelFilter::Warn),
-            3 => (LevelFilter::Trace, LevelFilter::Warn),
-            4 => (LevelFilter::Trace, LevelFilter::Info),
-            5 => (LevelFilter::Trace, LevelFilter::Debug),
-            _ => (LevelFilter::Trace, LevelFilter::Trace),
-        }
-    };
-
-    fern::Dispatch::new()
-        .format(move |out, message, record| {
-            if ks_log_level <= LevelFilter::Debug {
-                log_without_target(out, message, record)
-            } else {
-                log_with_target(out, message, record)
-            }
-        })
-        .level(other_log_level)
-        .level_for("krill_sync", ks_log_level)
-        .chain(std::io::stdout())
-        .apply()?;
-
-    if let Err(err) = lock::lock(&opt.pid_file) {
-        return Err(anyhow!(
-            "Failed to create lock file {:?}: {} (tip: use --pid-file to \
-            change the location of the lock file) ",
-            &opt.pid_file,
-            err
-        ));
-    }
-
-    // Ensure the lock file is removed even if we are killed by SIGINT or SIGTERM
-    let unlock_pid_file = opt.pid_file.clone();
-    ctrlc::set_handler(move || {
-        error!("CTRL-C caught, aborting.");
-        lock::unlock(&unlock_pid_file).unwrap();
-        std::process::exit(1);
-    })
-    .expect("Error setting Ctrl-C handler");
-
-    // If --state-dir was changed from the default, ensure that --rrdp-dir and
-    // --rsync-dir follow the change if their defaults were not overriden. This
-    // is a bit more complicated than I would like but this way --help shows the
-    // default values correctly without needing to specify them multiple times,
-    // and with structopt I don't think I can get to the underlying clap matches
-    // to find out if the args were specified (by checking the number of
-    // occurences).
-    if opt.state_dir != Path::new(DEFAULT_STATE_DIR) {
-        if opt.rrdp_dir == Path::new(DEFAULT_RRDP_DIR) {
-            opt.rrdp_dir = opt.rrdp_dir.replace(DEFAULT_STATE_DIR, &opt.state_dir);
-        }
-        if opt.rsync_dir == Path::new(DEFAULT_RSYNC_DIR) {
-            opt.rsync_dir = opt.rsync_dir.replace(DEFAULT_STATE_DIR, &opt.state_dir);
-        }
-    }
-
-    if opt.force_snapshot {
-        info!("Note: --force-snapshot=true: Snapshot download has been forced. RRDP deltas will not be used to accelerate snapshot syncing.")
-    }
-    if opt.force_update {
-        info!("Note: --force-update=true: Update will be forced even if upstream RRDP content is unchanged.")
-    }
-
-    Ok(opt)
 }

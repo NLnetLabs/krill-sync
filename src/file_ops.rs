@@ -1,28 +1,40 @@
+use anyhow::Context;
+use bytes::Bytes;
 use chrono::Utc;
 use crate::config;
 
 use anyhow::{anyhow, Result};
+use uuid::Uuid;
 
 use std::fs::File;
 use std::io::prelude::*; // for File::write_all()
 use std::path::{Path, PathBuf};
 
 pub fn write_buf(file_path: &Path, buf: &[u8]) -> Result<()> {
-    let dir = &file_path.parent().ok_or_else(|| anyhow!("Error determining parent of {:?}", &file_path))?;
-    std::fs::create_dir_all(&dir)?;
-    std::fs::File::create(file_path)?.write_all(buf)?;
+    let dir = file_path
+        .parent()
+        .ok_or_else(|| anyhow!("Error determining parent of {:?}", file_path))?;
+    
+        std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Cannot create dir {:?} for file {:?}", &dir, &file_path))?;
+
+    std::fs::File::create(file_path)
+        .with_context(|| format!("Cannot create file {:?}", file_path))?
+        .write_all(buf)
+        .with_context(|| format!("Cannot write file {:?}", file_path))?;
+
     Ok(())
 }
 
-pub fn read_file(file_path: &Path) -> Result<Vec<u8>> {
+pub fn read_file(file_path: &Path) -> Result<Bytes> {
     debug!("Loading file {:?}", &file_path);
     let mut f = File::open(file_path)?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
-    Ok(buf)
+    Ok(Bytes::from(buf))
 }
 
-pub fn set_path_ext(path: &Path, ext: &str) -> PathBuf {
+pub fn path_with_extension(path: &Path, ext: &str) -> PathBuf {
     let mut res = path.to_path_buf();
     res.set_extension(ext);
     res
@@ -32,10 +44,10 @@ pub fn set_path_ext(path: &Path, ext: &str) -> PathBuf {
 fn install_using_moves(
     final_path: &Path,
     is_dir: bool,
-    keep_with_extension: Option<String>) -> Result<()>
-{
+    keep_with_extension: Option<String>,
+) -> Result<()> {
     // This path represents the new data
-    let new_path = set_path_ext(final_path, config::TMP_FILE_EXT);
+    let new_path = path_with_extension(final_path, config::TMP_FILE_EXT);
 
     let delete_after = keep_with_extension.is_none();
 
@@ -63,9 +75,9 @@ fn install_using_moves(
     let old_path = Path::new(&old_path_str);
 
     if !final_path.exists() {
-        trace!("Atomic move {:?} -> {:?}", &new_path, &final_path);
+        trace!("Move {:?} -> {:?}", &new_path, &final_path);
     } else {
-        trace!("Atomic move {:?} -> {:?} -> {:?}", &new_path, &final_path, &old_path);
+        trace!("Move {:?} -> {:?} -> {:?}", &new_path, &final_path, &old_path);
     }
 
     // Move old data out of the way
@@ -91,10 +103,11 @@ fn install_using_moves(
     Ok(())
 }
 
+/// Installs the new 
 pub fn install_new_dir(final_path: &Path, keep_with_extension: String) -> Result<()> {
     install_using_moves(final_path, true, Some(keep_with_extension))
 }
 
-pub fn install_new_file(final_path: &Path, keep_with_extension: String) -> Result<()> {
-    install_using_moves(final_path, false, Some(keep_with_extension))
-}
+// pub fn install_new_file(final_path: &Path, keep_with_extension: String) -> Result<()> {
+//     install_using_moves(final_path, false, Some(keep_with_extension))
+// }
