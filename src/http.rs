@@ -2,32 +2,40 @@ use crate::config;
 
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
-use rayon::prelude::*;
 use rayon::current_num_threads;
-use retry::{retry_with_index, delay::{Exponential, jitter}};
+use rayon::prelude::*;
+use retry::{
+    delay::{jitter, Exponential},
+    retry_with_index,
+};
 use ring::digest;
 use routinator::reqwest::blocking::Response;
 use routinator::rpki::rrdp::DigestHex;
 use routinator::Config as RoutinatorConfig;
 
-use std::cmp::{min, max};
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 pub use routinator::rpki::uri::Https;
-pub use routinator::rrdp::http::HttpClient as HttpClient;
+pub use routinator::rrdp::http::HttpClient;
 
-fn download(
-    uri: &Https,
-    client: &HttpClient,
-    etag: Option<String>) -> Result<Option<Response>>
-{
+fn download(uri: &Https, client: &HttpClient, etag: Option<String>) -> Result<Option<Response>> {
     debug!("Downloading {}", &uri);
-    let response = client.response(&uri, etag).map_err(|error| anyhow!("Downloading {}: {:?}", &uri, error))?;
+    let response = client
+        .response(&uri, etag)
+        .map_err(|error| anyhow!("Downloading {}: {:?}", &uri, error))?;
     match response.status().as_u16() {
         200 => Ok(Some(response)),
         304 => Ok(None), // Not Modified (i.e. ETag matched)
-        other => Err(anyhow!("Error downloading {}: unexpected HTTP status code {}", &uri, other)),
+        other => Err(anyhow!(
+            "Error downloading {}: unexpected HTTP status code {}",
+            &uri,
+            other
+        )),
     }
 }
 
@@ -40,7 +48,7 @@ struct DigestWrite<W> {
 impl<W> DigestWrite<W> {
     fn new(writer: W, expected_hash: Option<DigestHex>) -> Self
     where
-        W: std::io::Write
+        W: std::io::Write,
     {
         DigestWrite {
             writer,
@@ -54,7 +62,7 @@ impl<W> DigestWrite<W> {
             let digest = self.context.finish();
             #[allow(clippy::match_bool)]
             match digest.as_ref() == expected_hash.as_ref() {
-                true  => Ok(()),
+                true => Ok(()),
                 false => Err(anyhow!("Hash mismatch")),
             }
         } else {
@@ -74,7 +82,11 @@ impl<W: std::io::Write> std::io::Write for DigestWrite<W> {
     }
 }
 
-fn verified_copy_to<W: std::io::Write>(response: &mut Response, w: &mut W, expected_hash: Option<DigestHex>) -> Result<()> {
+fn verified_copy_to<W: std::io::Write>(
+    response: &mut Response,
+    w: &mut W,
+    expected_hash: Option<DigestHex>,
+) -> Result<()> {
     let mut writer = DigestWrite::new(w, expected_hash);
     response.copy_to(&mut writer)?;
     writer.verify()
@@ -91,7 +103,8 @@ pub fn download_to_buf(
     uri: &Https,
     client: &HttpClient,
     send_etag: Option<String>,
-    hash: Option<DigestHex>) -> Result<Option<DownloadResult>> {
+    hash: Option<DigestHex>,
+) -> Result<Option<DownloadResult>> {
     match download(uri, client, send_etag.clone())? {
         Some(mut response) => {
             let response_etag = response.headers().get("ETag");
@@ -100,14 +113,14 @@ pub fn download_to_buf(
             // response.copy_to(&mut buf)?;
             verified_copy_to(&mut response, &mut buf, hash)?;
             Ok(Some(DownloadResult {
-                body: buf, 
-                etag: possible_response_etag
+                body: buf,
+                etag: possible_response_etag,
             }))
-        },
+        }
         None => match send_etag {
             Some(_) => Ok(None),
-            None => unreachable!() // only when using an ETag is a successful no-response possible
-        }
+            None => unreachable!(), // only when using an ETag is a successful no-response possible
+        },
     }
 }
 
@@ -116,20 +129,24 @@ pub fn download_to_file(
     client: &HttpClient,
     send_etag: Option<String>,
     hash: Option<DigestHex>,
-    file_path: &Path) -> Result<()> {
+    file_path: &Path,
+) -> Result<()> {
     match download(uri, client, send_etag) {
         Ok(Some(mut response)) => {
-            match file_path.parent().ok_or_else(|| anyhow!("Error determining parent of {:?}", &file_path)) {
+            match file_path
+                .parent()
+                .ok_or_else(|| anyhow!("Error determining parent of {:?}", &file_path))
+            {
                 Ok(dir) => {
                     std::fs::create_dir_all(&dir)?;
                     let mut f = std::fs::File::create(file_path)?;
                     // response.copy_to(&mut f)?;
                     verified_copy_to(&mut response, &mut f, hash)?;
                     Ok(())
-                },
-                Err(err) => Err(err)
+                }
+                Err(err) => Err(err),
             }
-        },
+        }
         Ok(None) => Ok(()),
         Err(err) => Err(err),
     }
@@ -149,8 +166,8 @@ pub enum MultiDownloadResult {
 
 pub fn download_multiple(
     files_to_download: &[DownloadType],
-    client: &HttpClient) -> Result<DashMap<Https, MultiDownloadResult>>
-{
+    client: &HttpClient,
+) -> Result<DashMap<Https, MultiDownloadResult>> {
     let num_downloads = files_to_download.len();
     let results = DashMap::with_capacity(num_downloads);
 
@@ -166,8 +183,13 @@ pub fn download_multiple(
 
         let reporting_thread = std::thread::spawn(move || {
             trace!("Download report background thread started");
-            let report_interval = max(config::REPORT_MAX,
-                min(config::REPORT_MIN, (num_downloads / 100) * config::REPORT_PERCENTAGE));
+            let report_interval = max(
+                config::REPORT_MAX,
+                min(
+                    config::REPORT_MIN,
+                    (num_downloads / 100) * config::REPORT_PERCENTAGE,
+                ),
+            );
 
             let mut n_when_last_reported = num_downloads;
             loop {
@@ -179,8 +201,13 @@ pub fn download_multiple(
                 }
                 let n_diff = n_when_last_reported - n_now;
                 if n_diff >= report_interval {
-                    info!("Downloading {} files concurrently: {} remaining, {} retried, {} failed",
-                        current_num_threads(), n_now, n_retries, n_failures);
+                    info!(
+                        "Downloading {} files concurrently: {} remaining, {} retried, {} failed",
+                        current_num_threads(),
+                        n_now,
+                        n_retries,
+                        n_failures
+                    );
                     n_when_last_reported = n_now;
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -192,8 +219,8 @@ pub fn download_multiple(
         fn try_download(
             downloadable: &DownloadType,
             client: &HttpClient,
-            results: &DashMap<Https, MultiDownloadResult>) -> Result<()>
-        {
+            results: &DashMap<Https, MultiDownloadResult>,
+        ) -> Result<()> {
             match downloadable {
                 DownloadType::ToFile((uri, hash, path)) => {
                     trace!("Downloading {:?} to file", downloadable);
@@ -201,7 +228,7 @@ pub fn download_multiple(
                     trace!("Downloading {:?} to file finished", downloadable);
                     results.insert(uri.clone(), MultiDownloadResult::ToFile(path.clone()));
                     trace!("Downloading {:?} result inserted", downloadable);
-                },
+                }
                 DownloadType::ToBuf(uri, hash) => {
                     trace!("Downloading {:?} to buf", downloadable);
                     if let Some(result) = download_to_buf(uri, client, None, hash.clone())? {
@@ -216,13 +243,16 @@ pub fn download_multiple(
         }
 
         files_to_download.par_iter().for_each(|downloadable| {
-            if let Err(err) = retry_with_index(Exponential::from_millis(1000).map(jitter).take(3), |current_try| {
-                trace!("Try {} for {:?}", current_try, downloadable);
-                if current_try > 1 {
-                    let _ = retries.fetch_add(1, Ordering::Relaxed);
-                }
-                try_download(downloadable, client, &results)
-            }) {
+            if let Err(err) = retry_with_index(
+                Exponential::from_millis(1000).map(jitter).take(3),
+                |current_try| {
+                    trace!("Try {} for {:?}", current_try, downloadable);
+                    if current_try > 1 {
+                        let _ = retries.fetch_add(1, Ordering::Relaxed);
+                    }
+                    try_download(downloadable, client, &results)
+                },
+            ) {
                 let uri = match downloadable {
                     DownloadType::ToFile((uri, ..)) => uri,
                     DownloadType::ToBuf(uri, ..) => uri,
@@ -249,8 +279,10 @@ pub fn download_multiple(
 pub fn create_client(insecure: bool) -> HttpClient {
     let mut config = RoutinatorConfig::default();
     config.rrdp_user_agent = config::USER_AGENT.to_string();
-    let mut rrdp_http_client = HttpClient::new(&config, insecure)
-        .expect("Failed to create RRDP client");
-    rrdp_http_client.ignite().expect("Failed to ignite RRDP client");
+    let mut rrdp_http_client =
+        HttpClient::new(&config, insecure).expect("Failed to create RRDP client");
+    rrdp_http_client
+        .ignite()
+        .expect("Failed to ignite RRDP client");
     rrdp_http_client
 }
