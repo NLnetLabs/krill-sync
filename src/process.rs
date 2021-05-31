@@ -2,14 +2,14 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::{config::Config, fetch::Fetcher, rsync};
+use crate::{config::Config, fetch::Fetcher, rrdp::RrdpState, rsync};
 
 pub fn process(config: Config) -> Result<()> {
        
     let fetcher = Fetcher::new(config.notification_uri.clone(), config.fetch_map.clone());
     info!("Checking: {}", config.notification_uri);
 
-    let rrdp_state = fetcher.rrdp_state()?;
+    let rrdp_state = RrdpState::create(&fetcher)?;
 
     // ===================================================================
     // If enabled, use the remote RRDP data to create a local copy of the
@@ -50,6 +50,25 @@ pub fn process(config: Config) -> Result<()> {
         //     .rsync_publication_timestamps
         //     .insert(new_state.notify_serial, seconds_since_epoch);
     }
+
+    // ===================================================
+    // Update the local RRDP snapshot and delta XML files.
+    // ===================================================
+
+    // A normal Relying Party client would only need either the snapshot XML or
+    // the delta XMLs, not both, but we need to be able to output copies of both
+    // the snapshot and delta XMLs to be served to RP clients.
+    if config.rrdp_enabled() {
+        rrdp_state.write_snapshot(&config.rrdp_dir)?;
+        rrdp_state.write_missing_deltas(&config.rrdp_dir)?;
+
+        if config.rrdp_notify_delay > 0 {
+            info!("Waiting {} seconds before writing RRDP notification file", config.rrdp_notify_delay);
+            std::thread::sleep(std::time::Duration::from_secs(config.rrdp_notify_delay));
+        }
+
+        rrdp_state.write_notification(&config.rrdp_dir, &config.notification_uri)?;
+    }    
 
 
     

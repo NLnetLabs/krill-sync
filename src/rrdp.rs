@@ -1,113 +1,211 @@
-use rpki::rrdp::{Delta, NotificationFile, Snapshot};
+use std::{fs, path::Path};
 
-// use std::convert::TryFrom;
-// use std::convert::TryInto;
-// use std::io;
-// use std::io::Read;
-// use std::fmt;
+use anyhow::{Context, Result};
+use bytes::Bytes;
 
-// use bytes::Bytes;
-// use uuid::Uuid;
+use rpki::{rrdp::{self, Delta, Hash, NotificationFile, PublishElement, Snapshot, SnapshotInfo}, uri::Https};
+use uuid::Uuid;
 
-// use rpki::{
-//     rrdp::{NotificationFile, ObjectReader, ProcessError, ProcessSnapshot},
-//     uri,
-// };
-
-// use rpki::xml::decode::Error as XmlError;
+use crate::{fetch::Fetcher, file_ops};
 
 pub struct RrdpState {
-    notification: NotificationFile,
-    snapshot: Snapshot,
-    deltas: Vec<Delta>
+    /// The identifier of the current session of the server.
+    ///
+    /// Delta updates can only be used if the session ID of the last processed
+    /// update matches this value.
+    session_id: Uuid,
+    
+    /// The serial number of the most recent update provided by the server.
+    ///
+    /// Serial numbers increase by one between each update.
+    serial: u64,
+
+    /// Current elements as would be found on the last snapshot
+    elements: Vec<PublishElement>,
+
+    /// Current snapshot state (xml, hash, path)
+    snapshot: SnapshotState,
+
+    /// Delta states (xml, hash, path)
+    deltas: Vec<DeltaState>
 }
 
 impl RrdpState {
-    pub fn new(
-        notification: NotificationFile,
-        snapshot: Snapshot,
-        deltas: Vec<Delta>
-    ) -> Self {
-        RrdpState { notification, snapshot, deltas }
+    /// Build up a new RrdpState, i.e. without prior state, from source files
+    /// obtained using the fetcher.
+    pub fn create(fetcher: &Fetcher) -> Result<Self> {
+
+        let notification_file = fetcher.read_notification_file()?;
+
+        let session_id = notification_file.session_id();
+        let serial = notification_file.serial();
+
+        let snapshot_info = notification_file.snapshot();
+
+        let snapshot_org = fetcher.read_snapshot_file(snapshot_info.uri(), snapshot_info.hash())?;
+        let snapshot = SnapshotState::create(&snapshot_org)?;
+        
+        let elements = snapshot_org.into_elements();
+
+        let mut deltas = vec![];
+        for delta in notification_file.deltas() {
+            let delta = fetcher.read_delta_file(delta.serial(), delta.uri(), delta.hash())?;
+            let delta = DeltaState::create(&delta)?;
+            deltas.push(delta);
+        }
+
+        Ok(RrdpState { 
+            session_id,
+            serial,
+            elements,
+            snapshot,
+            deltas
+        })
     }
 
-    pub fn notification(&self) -> &NotificationFile {
-        &self.notification
+    
+    pub fn session_id(&self) -> Uuid {
+        self.session_id
     }
 
-    pub fn snapshot(&self) -> &Snapshot {
-        &self.snapshot
+    pub fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    pub fn elements(&self) -> &Vec<PublishElement> {
+        &self.elements
+    }
+
+
+    /// Writes the notification file to disk. Will first write to a
+    /// temporary file and then rename it to avoid serving partially
+    /// written files.
+    pub fn write_notification(&self, base_path: &Path, notification_uri: &Https) -> Result<()> {
+        let tmp_path = base_path.join(".notification.xml");
+        let final_path = base_path.join("notification.xml");
+
+        let notification = self.make_notification_file(notification_uri)?;
+        
+        let mut bytes: Vec<u8> = vec![];
+        let mut writer = rpki::xml::encode::Writer::new_with_indent(&mut bytes);
+        notification.to_xml(&mut writer)?;
+        
+        file_ops::write_buf(&tmp_path, &bytes)
+            .with_context(|| "Could not write temporary notification file")?;
+
+        fs::rename(tmp_path, final_path)
+            .with_context(|| "Could not rename tmp notification file to real notification file")?;
+        
+        Ok(())
+    }
+    
+    fn make_notification_file(&self, notification_uri: &Https) -> Result<NotificationFile> {
+        let base_uri = notification_uri.parent()
+            .ok_or_else(|| anyhow!("Notification URI does not have a parent?!"))?;
+    
+        let snapshot_uri = base_uri.join(self.rel_path_snapshot().as_bytes())
+            .with_context(|| "Could not derive snapshot URI")?;
+        
+        let snapshot_hash = Hash::from_data(self.snapshot.xml.as_ref());
+        let snapshot_info = SnapshotInfo::new(snapshot_uri, snapshot_hash);
+    
+        let mut deltas = vec![];
+    
+        Ok(NotificationFile::new(
+            self.session_id,
+            self.serial,
+            snapshot_info,
+            deltas
+        ))
+    }
+
+    /// Writes a new notification file. Will not check whether the file already
+    /// exists because this is assumed to be called for new snapshot files only.
+    pub fn write_snapshot(&self, base_path: &Path) -> Result<()> {
+        let path = base_path.join(self.rel_path_snapshot());
+        info!("Writing RRDP snapshot to {:?}", path);
+        file_ops::write_buf(&path, self.snapshot.xml.as_ref())
+            .with_context(|| "Could not write snapshot XML")?;
+
+        Ok(())
+    }
+
+    /// Writes any deltas for which no current file is found. I.e. it is assumed
+    /// that a file which is present was not tampered with since writing it.
+    pub fn write_missing_deltas(&self, base_path: &Path) -> Result<()> {
+        for delta in &self.deltas {
+            let path = base_path.join(self.rel_path_delta(delta.serial));
+            if path.exists() {
+                debug!("Skip writing delta file to {:?}", path)
+            } else {
+                info!("Write delta file to {:?}", path);
+                file_ops::write_buf(&path, delta.xml.as_ref())
+                    .with_context(|| "Could not write delta XML")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn rel_path_snapshot(&self) -> String {
+        format!("{}/{}/snapshot.xml", self.session_id, self.serial)
+    }
+
+    fn rel_path_delta(&self, serial: u64) -> String {
+        format!("{}/{}/delta.xml", self.session_id, serial)
+    }
+
+}
+
+/// Represents a parsed and thereby reconstructed RRDP snapshot file.
+/// Because the XML is reconstructed we cannot rely on the hash reported in the
+/// original notification file.
+pub struct SnapshotState {
+    xml: Bytes,
+    hash: rrdp::Hash,
+}
+
+impl SnapshotState {
+    fn create(snapshot: &Snapshot) -> Result<Self> {
+        
+        let mut bytes: Vec<u8> = vec![];
+        let mut writer = rpki::xml::encode::Writer::new_with_indent(&mut bytes);
+        snapshot.to_xml(&mut writer)?;
+        let xml: Bytes = bytes.into();
+        
+        let hash = rrdp::Hash::from_data(xml.as_ref());
+
+        Ok(SnapshotState { xml, hash })
     }
 }
 
-// pub struct PublishElement {
-//     uri: uri::Rsync,
-//     data: Bytes,
-// }
+/// Represents a parsed and thereby reconstructed RRDP delta file.
+/// Because the XML is reconstructed we cannot rely on the hash reported in the
+/// original notification file.
+pub struct DeltaState {
+    serial: u64,
+    xml: Bytes,
+    hash: rrdp::Hash,
+}
 
-// pub struct Snapshot {
-//     session_id: Uuid,
-//     serial: u64,
-//     elements: Vec<PublishElement>,
-// }
+impl DeltaState {
+    fn create(delta: &Delta) -> Result<Self> {
+    
+        let serial = delta.serial();
+        
+        let mut bytes: Vec<u8> = vec![];
+        let mut writer = rpki::xml::encode::Writer::new_with_indent(&mut bytes);
+        delta.to_xml(&mut writer)?;
+        let xml: Bytes = bytes.into();
+        
+        let hash = rrdp::Hash::from_data(xml.as_ref());
 
-// impl Snapshot {
-//     /// Parse 
-//     pub fn parse<R: io::BufRead>(
-//         reader: R
-//     ) -> Result<Self, RrdpProcessError> {
-//         let mut builder = SnapshotBuilder {
-//             session_id: None,
-//             serial: None,
-//             elements: vec![]
-//         };
-
-//         builder.process(reader)?;
-//         builder.try_into()
-//     }
-// }
-
-// struct SnapshotBuilder {
-//     session_id: Option<Uuid>,
-//     serial: Option<u64>,
-//     elements: Vec<PublishElement>,
-// }
+        Ok(DeltaState { serial, xml, hash })
+    }
+}
 
 
-// impl ProcessSnapshot for SnapshotBuilder {
-//     type Err = RrdpProcessError;
 
-//     fn meta(&mut self, session_id: Uuid, serial: u64) -> Result<(), Self::Err> {
-//         self.session_id = Some(session_id);
-//         self.serial = Some(serial);
-//         Ok(())
-//     }
-
-//     fn publish(&mut self, uri: uri::Rsync, data: &mut ObjectReader) -> Result<(), Self::Err> {
-//         let mut buf = Vec::new();
-//         data.read_to_end(&mut buf)?;
-//         let data = Bytes::from(buf);
-//         let element = PublishElement { uri, data };
-//         self.elements.push(element);
-//         Ok(())
-//     }
-// }
-
-// impl TryFrom<SnapshotBuilder> for Snapshot {
-//     type Error = RrdpProcessError;
-
-//     fn try_from(builder: SnapshotBuilder) -> Result<Self, Self::Error> {
-//         let session_id = builder.session_id.ok_or_else(||
-//             RrdpProcessError::Xml(XmlError::Malformed)
-//         )?;
-
-//         let serial = builder.serial.ok_or_else(||
-//             RrdpProcessError::Xml(XmlError::Malformed)
-//         )?;
-
-//         Ok(Snapshot { session_id, serial, elements: builder.elements })
-//     }
-// }
 // //------------ RrdpProcessError ----------------------------------------------
 
 // #[derive(Debug)]

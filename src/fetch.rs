@@ -3,15 +3,14 @@ use std::{fmt::{self, Debug}, path::PathBuf, str::FromStr};
 use anyhow::{Context, Result};
 
 use bytes::Bytes;
-use rpki::{rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot}, uri};
+use rpki::{rrdp::{Delta, Hash, NotificationFile, Snapshot}, uri::{self, Https}};
 
 use crate::{
     file_ops,
-    rrdp::RrdpState
 };
 
 //------------ FetchSource ---------------------------------------------------
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FetchSource {
     File(PathBuf),
     Uri(uri::Https),
@@ -134,39 +133,22 @@ impl Fetcher {
         Fetcher { notification_uri, fetch_map }
     }
 
-    pub fn rrdp_state(&self) -> Result<RrdpState> {
-        let mut notification_file = self.read_notification_file()?;
+    pub fn read_notification_file(&self) -> Result<NotificationFile> {
+        let snapshot_source = self.resolve_source(&self.notification_uri)?;
+        let bytes = snapshot_source.fetch(None)?;
+        let mut notification_file = NotificationFile::parse(bytes.as_ref())
+            .with_context(|| "Failed to parse notification file")?;
 
         if ! notification_file.sort_and_verify_deltas() {
             Err(anyhow!("Notification file contained gaps in deltas"))
         } else {
-            let snapshot = self.read_snapshot_file(&notification_file)?;
-
-            let mut deltas = vec![];
-
-            for delta in notification_file.deltas() {
-                deltas.push(self.read_delta_file(delta)?);
-            }
-
-            Ok(RrdpState::new(notification_file, snapshot, deltas))
+            Ok(notification_file)
         }
     }
 
-    fn read_notification_file(&self) -> Result<NotificationFile> {
-        let snapshot_source = self.resolve_source(&self.notification_uri)?;
-        let bytes = snapshot_source.fetch(None)?;
-        let notification_file = NotificationFile::parse(bytes.as_ref())
-            .with_context(|| "Failed to parse notification file")?;
-
-        Ok(notification_file)
-    }
-
-    fn read_snapshot_file(&self, notification: &NotificationFile) -> Result<Snapshot> {
-        let snapshot_uri = notification.snapshot().uri();
-        let snapshot_hash = notification.snapshot().hash();
-
-        let snapshot_source = self.resolve_source(snapshot_uri)?;
-        let snapshot_bytes = snapshot_source.fetch(Some(snapshot_hash))?;
+    pub fn read_snapshot_file(&self, uri: &Https, hash: Hash) -> Result<Snapshot> {
+        let snapshot_source = self.resolve_source(uri)?;
+        let snapshot_bytes = snapshot_source.fetch(Some(hash))?;
 
         let snapshot = Snapshot::parse(snapshot_bytes.as_ref())
             .with_context(|| "Failed to parse snapshot file")?;
@@ -177,15 +159,15 @@ impl Fetcher {
     /// Retrieves a delta file, resolving the given URI against the local fetch map
     /// if applicable. Will insist that the Hash matches the content of the delta file
     /// and that the delta is applicable to the given version.
-    fn read_delta_file(&self, delta_info: &DeltaInfo) -> Result<Delta> {
-        let delta_source = self.resolve_source(delta_info.uri())?;
-        let delta_bytes = delta_source.fetch(Some(delta_info.hash()))?;
+    pub fn read_delta_file(&self, serial: u64, uri: &Https, hash: Hash) -> Result<Delta> {
+        let delta_source = self.resolve_source(uri)?;
+        let delta_bytes = delta_source.fetch(Some(hash))?;
 
         let delta = Delta::parse(delta_bytes.as_ref())
-            .with_context(|| format!("Failed to parse delta file for uri: {}, from location: {}", delta_info.uri(), delta_source))?;
+            .with_context(|| format!("Failed to parse delta file for uri: {}, from location: {}", uri, delta_source))?;
 
-        if delta.serial() != delta_info.serial() {
-            Err(anyhow!(format!("Delta file for uri: {} had serial {} instead of {}", delta_info.uri(), delta.serial(), delta_info.serial())))
+        if delta.serial() != serial {
+            Err(anyhow!(format!("Delta file for uri: {} had serial {} instead of {}", uri, delta.serial(), serial)))
         } else {
             Ok(delta)
         }
@@ -202,16 +184,17 @@ impl Fetcher {
 #[cfg(test)]
 mod tests {
 
-    use std::str::FromStr;
+    use crate::util::https;
 
     use super::*;
 
     #[test]
-    fn get_rrdp_state() {
-        let base_fetch_path = PathBuf::from("test-resources/rrdp/");
-        let base_fetch = FetchSource::File(base_fetch_path);
+    fn resolve_fetch_to_disk() {
+        let base_path = PathBuf::from("test-resources/rrdp/");
 
-        let base_uri = uri::Https::from_str("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/").unwrap(); 
+        let base_fetch = FetchSource::File(base_path.to_path_buf());
+
+        let base_uri = https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/"); 
         let notification_uri = base_uri.join(b"notification.xml").unwrap();
 
         let fetch_map = Some(FetchMap {
@@ -224,6 +207,34 @@ mod tests {
             fetch_map,
         };
 
-        let _rrdp_state = fetcher.rrdp_state().unwrap();
+        let file_source = fetcher.resolve_source(&https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/foo/bar/bla.xml")).unwrap();
+        let expected_file_source = FetchSource::File(base_path.join("foo/bar/bla.xml"));
+        assert_eq!(file_source, expected_file_source);
+
+        assert!(fetcher.resolve_source(&https("https://other.host/rrdp/foo.txt")).is_err());
+    }
+
+    #[test]
+    fn resolve_fetch_to_uri() {
+        let base_uri = https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/"); 
+        let notification_uri = base_uri.join(b"notification.xml").unwrap();
+        
+        let base_fetch = FetchSource::Uri(https("https://other.host/rrdp/"));
+
+        let fetch_map = Some(FetchMap {
+            base_uri,
+            base_fetch,
+        });
+
+        let fetcher = Fetcher {
+            notification_uri,
+            fetch_map,
+        };
+
+        let file_source = fetcher.resolve_source(&https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/foo/bar/bla.xml")).unwrap();
+        let expected_file_source = FetchSource::Uri(https("https://other.host/rrdp/foo/bar/bla.xml"));
+        assert_eq!(file_source, expected_file_source);
+
+        assert!(fetcher.resolve_source(&https("https://other.host/rrdp/foo.txt")).is_err());
     }
 }

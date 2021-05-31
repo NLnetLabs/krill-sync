@@ -4,7 +4,6 @@ use chrono::Utc;
 use crate::config;
 
 use anyhow::{anyhow, Result};
-use uuid::Uuid;
 
 use std::fs::File;
 use std::io::prelude::*; // for File::write_all()
