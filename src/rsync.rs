@@ -4,6 +4,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 
+use rpki::rrdp::PublishElement;
 use rpki::{
     rrdp::Snapshot,
     uri,
@@ -27,8 +28,8 @@ pub fn build_repo_from_rrdp_snapshot(
 ) -> Result<()> {
     let rsync_dir = &config.rsync_dir;
     
-    let session_id = rrdp_state.notification().session_id();
-    let serial = rrdp_state.notification().serial();
+    let session_id = rrdp_state.session_id();
+    let serial = rrdp_state.serial();
 
     let rsync_dir_for_snapshot_name = format!("revision_{}_{}", session_id, serial);
     
@@ -37,7 +38,7 @@ pub fn build_repo_from_rrdp_snapshot(
 
     info!("Writing rsync repository to: {:?}", out_path);
 
-    write_rsync_content(&out_path, rrdp_state.snapshot())?;
+    write_rsync_content(&out_path, rrdp_state.elements())?;
 
     if config.rsync_dir_use_symlinks() {
         info!("Updating symlink 'current' to '{}' under rsync dir '{:?}'", rsync_dir_for_snapshot_name, rsync_dir);
@@ -105,21 +106,9 @@ pub fn build_repo_from_rrdp_snapshot(
 
 fn write_rsync_content(
     out_path: &Path,
-    snapshot: &Snapshot,
+    elements: &[PublishElement],
 ) -> Result<()> {
-    // client
-    //     .snapshot_from_buf(
-    //         &notify,
-    //         |uri| {
-    //             let this_out_path = out_path.join(make_rsync_repo_path(&uri).unwrap());
-    //             trace!("Writing Rsync file {:?}", &this_out_path);
-    //             this_out_path
-    //         },
-    //         &raw_snapshot,
-    //     )
-    //     .map_err(|err| anyhow!("Error updating Rsync repository: {:?}", &err))?;
-    // make_rsync_repo_path(uri)
-    for element in snapshot.elements() {
+    for element in elements {
         let path = out_path.join(make_rsync_repo_path(element.uri()));
         trace!("Writing rsync file {:?}", &path);
         file_ops::write_buf(&path, element.data())?;
