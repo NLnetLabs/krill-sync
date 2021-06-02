@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fs, path::{Path, PathBuf}};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -6,10 +6,17 @@ use bytes::Bytes;
 use rpki::{rrdp::{self, Delta, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot, SnapshotInfo}, uri::{Https, Rsync}};
 use uuid::Uuid;
 
-use crate::{fetch::Fetcher, file_ops, util};
+use crate::{config::Config, fetch::Fetcher, file_ops, util};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RrdpState {
+    /// The notification URI, will be used to derive the URIs for the
+    /// snapshot and delta files.
+    notification_uri: Https,
+
+    /// Base path to where the RRDP files should be saved
+    rrdp_dir: PathBuf,
+
     /// The identifier of the current session of the server.
     ///
     /// Delta updates can only be used if the session ID of the last processed
@@ -23,7 +30,7 @@ pub struct RrdpState {
     serial: u64,
     
     /// Current objects (recovered from snapshot xml at startup)
-    #[serde(skip_serializing)]
+    #[serde(skip)]
     elements: Vec<CurrentObject>,
 
     /// Current snapshot state (xml, hash, path)
@@ -34,10 +41,12 @@ pub struct RrdpState {
 }
 
 impl RrdpState {
-    /// Build up a new RrdpState, i.e. without prior state, from source files
-    /// obtained using the fetcher.
-    pub fn create(fetcher: &Fetcher) -> Result<Self> {
-
+    /// Build up a new RrdpState, i.e. without prior state.
+    pub fn create(config: &Config) -> Result<Self> {
+        let notification_uri = config.notification_uri.clone();
+        let rrdp_dir = config.rrdp_dir.clone();
+        
+        let fetcher = config.fetcher();
         let notification_file = fetcher.read_notification_file()?;
 
         let session_id = notification_file.session_id();
@@ -62,6 +71,8 @@ impl RrdpState {
         }
 
         Ok(RrdpState { 
+            notification_uri,
+            rrdp_dir,
             session_id,
             serial,
             elements,
@@ -70,7 +81,94 @@ impl RrdpState {
         })
     }
 
+    /// Recover from disk. Reads the last known state from disk and re-parses the current snapshot 
+    /// and all delta files. Returns an error if any of this fails.
+    pub fn recover(state_path: &Path) -> Result<Self> {
+        let json_bytes = file_ops::read_file(state_path)
+            .with_context(|| format!("Cannot read state file at: {:?}", state_path))?;
+
+        // Recover state with meta info from disk.
+        let mut recovered: RrdpState = serde_json::from_slice(json_bytes.as_ref())
+            .with_context(|| format!("Cannot deserialize json for current state from {:?}", state_path))?;
+        
+        // Now reload and parse all xml files
+        recovered.recover_snapshot()?;
+        recovered.recover_deltas()?;
+
+        Ok(recovered)
+    }
+
+    fn recover_snapshot(&mut self) -> Result<()> {
+        let snapshot_path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
+        let snapshot_bytes = file_ops::read_file(&snapshot_path)
+            .with_context(|| format!("Cannot read snapshot from {:?}", snapshot_path))?;
+        
+        let snapshot = Snapshot::parse(snapshot_bytes.as_ref())
+            .with_context(|| format!("Cannot parse snapshot from {:?}", snapshot_path))?;
+
+        self.elements = snapshot
+            .into_elements()
+            .into_iter()
+            .map(|e| e.into())
+            .collect();
+
+        self.snapshot.set_xml(snapshot_bytes);
+
+        Ok(())
+    }
+
+    fn recover_deltas(&mut self) -> Result<()> {
+        let base_dir = self.rrdp_dir.clone();
+        let session = self.session_id();
+        
+        for delta in self.deltas.iter_mut() {
+            let delta_path = Self::path_delta(&base_dir, session, delta.serial);
+            
+            let delta_bytes = file_ops::read_file(&delta_path)
+                .with_context(|| format!("Cannot read delta file from {:?}", delta_path))?;
+            
+            Delta::parse(delta_bytes.as_ref())
+                .with_context(|| format!("Cannot parse delta file from {:?}", delta_path))?;
+            
+                delta.set_xml(delta_bytes);
+        }
+
+        Ok(())
+    }
+
+    /// Try to update this state using the notification file found in the specified fetcher.
+    /// Returns:
+    ///   Ok(true)  if there was an update
+    ///   Ok(false) if there was no update (serial and session match current)
+    ///   Err       if there was an error trying to update
+    pub fn update(&mut self, fetcher: &Fetcher) -> Result<bool> {
+        todo!()
+    }
+
+    /// Write out all *missing* RRDP files. Optionally delay writing the notification file for
+    /// the specified number of seconds
+    pub fn write_rrdp_files(&self, notify_delay: u64) -> Result<()> {
+        self.write_snapshot()?;
+        self.write_missing_deltas()?;
     
+        if notify_delay > 0 {
+            info!("Waiting {} seconds before writing RRDP notification file", notify_delay);
+            std::thread::sleep(std::time::Duration::from_secs(notify_delay));
+        }
+        
+        self.write_notification()?;
+
+        Ok(())
+    }
+
+    /// Persist the RRDP state to disk (as json)
+    pub fn persist(&self, path: &Path) -> Result<()> {
+        let json = serde_json::to_string_pretty(&self)?;
+
+        file_ops::write_buf(path, json.as_bytes())
+            .with_context(|| "Could not save state.")
+    }
+   
     pub fn session_id(&self) -> Uuid {
         self.session_id
     }
@@ -87,11 +185,12 @@ impl RrdpState {
     /// Writes the notification file to disk. Will first write to a
     /// temporary file and then rename it to avoid serving partially
     /// written files.
-    pub fn write_notification(&self, base_path: &Path, notification_uri: &Https) -> Result<()> {
-        let tmp_path = base_path.join(".notification.xml");
-        let final_path = base_path.join("notification.xml");
+    pub fn write_notification(&self) -> Result<()> {
 
-        let notification = self.make_notification_file(notification_uri)?;
+        let tmp_path = self.rrdp_dir.join(".notification.xml");
+        let final_path = self.rrdp_dir.join("notification.xml");
+
+        let notification = self.make_notification_file()?;
         
         let mut bytes: Vec<u8> = vec![];
         let mut writer = rpki::xml::encode::Writer::new_with_indent(&mut bytes);
@@ -106,11 +205,13 @@ impl RrdpState {
         Ok(())
     }
     
-    fn make_notification_file(&self, notification_uri: &Https) -> Result<NotificationFile> {
-        let base_uri = notification_uri.parent()
+    fn make_notification_file(&self) -> Result<NotificationFile> {
+        let base_uri = self.notification_uri.parent()
             .ok_or_else(|| anyhow!("Notification URI does not have a parent?!"))?;
+
+        let rel_path_snapshot = Self::rel_path_snapshot( self.session_id(), self.serial());
     
-        let snapshot_uri = base_uri.join(self.rel_path_snapshot().as_bytes())
+        let snapshot_uri = base_uri.join(rel_path_snapshot.as_bytes())
             .with_context(|| "Could not derive snapshot URI")?;
         
         let snapshot_hash = self.snapshot.hash();
@@ -120,7 +221,8 @@ impl RrdpState {
         for delta in &self.deltas {
             let serial = delta.serial();
             let hash = delta.hash();
-            let uri = base_uri.join(self.rel_path_delta(serial).as_bytes())
+            let rel_path_delta = Self::rel_path_delta(self.session_id(), serial);
+            let uri = base_uri.join(rel_path_delta.as_bytes())
                 .with_context(|| "Could not derive delta URI")?;
             
             deltas.push(DeltaInfo::new(serial, uri, hash));
@@ -136,9 +238,8 @@ impl RrdpState {
 
     /// Writes a new notification file. Will not check whether the file already
     /// exists because this is assumed to be called for new snapshot files only.
-    pub fn write_snapshot(&self, base_path: &Path) -> Result<()> {
-        let path = base_path.join(self.rel_path_snapshot());
-        info!("Writing RRDP snapshot to {:?}", path);
+    fn write_snapshot(&self) -> Result<()> {
+        let path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
         let xml = self.snapshot.xml().ok_or_else(||
             anyhow!("Snapshot XML not recovered on startup")
         )?;
@@ -150,9 +251,9 @@ impl RrdpState {
 
     /// Writes any deltas for which no current file is found. I.e. it is assumed
     /// that a file which is present was not tampered with since writing it.
-    pub fn write_missing_deltas(&self, base_path: &Path) -> Result<()> {
+    fn write_missing_deltas(&self) -> Result<()> {
         for delta in &self.deltas {
-            let path = base_path.join(self.rel_path_delta(delta.serial));
+            let path = Self::path_delta(&self.rrdp_dir, self.session_id(), delta.serial);
             if path.exists() {
                 debug!("Skip writing delta file to {:?}", path)
             } else {
@@ -168,19 +269,27 @@ impl RrdpState {
         Ok(())
     }
 
-    fn rel_path_snapshot(&self) -> String {
-        format!("{}/{}/snapshot.xml", self.session_id, self.serial)
+    fn path_snapshot(base_dir: &Path, session: Uuid, serial: u64) -> PathBuf {
+        base_dir.join(Self::rel_path_snapshot(session, serial))
     }
 
-    fn rel_path_delta(&self, serial: u64) -> String {
-        format!("{}/{}/delta.xml", self.session_id, serial)
+    fn path_delta(base_dir: &Path, session: Uuid, serial: u64) -> PathBuf {
+        base_dir.join(Self::rel_path_delta(session, serial))
+    }
+
+    fn rel_path_snapshot(session: Uuid, serial: u64) -> String {
+        format!("{}/{}/snapshot.xml", session, serial)
+    }
+
+    fn rel_path_delta(session: Uuid, serial: u64) -> String {
+        format!("{}/{}/delta.xml", session, serial)
     }
 
 }
 
 //------------ CurrentObject -------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CurrentObject {
     uri: Rsync,
 
@@ -210,7 +319,7 @@ impl From<PublishElement> for CurrentObject {
 /// Represents a parsed and thereby reconstructed RRDP snapshot file.
 /// Because the XML is reconstructed we cannot rely on the hash reported in the
 /// original notification file.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SnapshotState {
     // #[serde(deserialize_with = "util::de_bytes", serialize_with = "util::ser_bytes")]
     #[serde(skip)]
@@ -239,6 +348,10 @@ impl SnapshotState {
     pub fn xml(&self) -> Option<&Bytes> {
         self.xml.as_ref()
     }
+
+    fn set_xml(&mut self, bytes: Bytes) {
+        self.xml = Some(bytes);
+    }
 }
 
 //------------ DeltaState ----------------------------------------------------
@@ -246,7 +359,7 @@ impl SnapshotState {
 /// Represents a parsed and thereby reconstructed RRDP delta file.
 /// Because the XML is reconstructed we cannot rely on the hash reported in the
 /// original notification file.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeltaState {
     serial: u64,
     
@@ -282,8 +395,41 @@ impl DeltaState {
     pub fn xml(&self) -> Option<&Bytes> {
         self.xml.as_ref()
     }
+
+    fn set_xml(&mut self, bytes: Bytes) {
+        self.xml = Some(bytes);
+    }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use crate::util::{https, test_with_dir};
+    use crate::config::create_test_config;
+
+    use super::*;
+
+    #[test]
+    fn build_and_recover() {
+
+        test_with_dir("rrdp_state_build_and_recover", |dir| {
+            let notification_uri = https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+            let source_uri_base ="./test-resources/rrdp/";
+    
+            let config = create_test_config(&dir, notification_uri, source_uri_base);
+
+            // Build state from source
+            let state = RrdpState::create(&config).unwrap();
+            state.write_rrdp_files(0).unwrap();
+            state.persist(&config.state_path()).unwrap();
+
+            // Recover
+            let recovered = RrdpState::recover(&config.state_path()).unwrap();
+
+            assert_eq!(state, recovered);
+        })
+    }
+}
 
 
 // //------------ RrdpProcessError ----------------------------------------------

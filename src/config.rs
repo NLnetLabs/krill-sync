@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use log::LevelFilter;
-use structopt::clap::{arg_enum, crate_name, crate_version};
+use structopt::clap::{crate_name, crate_version};
 use structopt::StructOpt;
 
 use rpki::uri::Https;
 
-use crate::fetch::{FetchMap, FetchSource};
+use crate::fetch::{FetchMap, FetchSource, Fetcher};
 
 pub const DELTA_FNAME: &str = "delta.xml";
 pub const NOTIFICATION_FNAME: &str = "notification.xml";
@@ -42,20 +42,6 @@ pub const DEFAULT_RSYNC_DIR: &str = concat!("/var/lib/", crate_name!(), "/rsync"
 /// See: https://www.pathname.com/fhs/pub/fhs-2.3.html#VARLIBVARIABLESTATEINFORMATION
 pub const DEFAULT_STATE_DIR: &str = concat!("/var/lib/", crate_name!());
 
-arg_enum! {
-    #[derive(PartialEq, Debug)]
-    pub enum Format {
-        Both,
-        Rrdp,
-        Rsync
-    }
-}
-
-impl Default for Format {
-    fn default() -> Self {
-        Format::Both
-    }
-}
 
 trait Replace {
     fn replace(&self, from_str: &str, to: &Path) -> PathBuf;
@@ -69,7 +55,7 @@ impl Replace for PathBuf {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Clone, Debug, StructOpt)]
 #[structopt(
     about = "A tool to synchronize an RRDP and/or Rsync server with a remote RRDP publication point.",
     long_version = concat!(crate_version!(), " (", env!("VERGEN_SHA_SHORT"), ")"),
@@ -97,10 +83,6 @@ pub struct Config {
     #[structopt(long = "force-update")]
     pub force_update: bool,
 
-    /// Output both RRDP and Rsync style repositories or only one of them?
-    #[structopt(long = "format", short = "f", default_value, possible_values(&Format::variants()), case_insensitive = true )]
-    pub format: Format,
-
     /// The location to write our process ID to
     #[structopt(long = "pid-file", parse(from_os_str), default_value = DEFAULT_PID_FILE_PATH)]
     pub pid_file: PathBuf,
@@ -121,8 +103,14 @@ pub struct Config {
     #[structopt(long = "rsync-dir", parse(from_os_str), default_value = DEFAULT_RSYNC_DIR)]
     pub rsync_dir: PathBuf,
 
+    /// Force using directory moves rather than symlinks on unix systems. Mainly added to help
+    /// test the alternative code path.
     #[structopt(long = "rsync-dir-force-moves")]
     pub rsync_dir_force_moves: bool,
+
+    /// Disable writing the rsync files.
+    #[structopt(long = "rsync-disable")]
+    pub rsync_disable: bool,
 
     /// The minimum number of seconds that a dangling snapshot or delta must have been published by krill-sync before it can be removed
     #[structopt(long = "cleanup-after", value_name = "seconds", default_value = DEFAULT_CLEANUP_SECONDS)]
@@ -151,11 +139,7 @@ pub struct Config {
 
 impl Config {
     pub fn rsync_enabled(&self) -> bool {
-        self.format == Format::Both || self.format == Format::Rsync
-    }
-
-    pub fn rrdp_enabled(&self) -> bool {
-        self.format == Format::Both || self.format == Format::Rrdp
+        !self.rsync_disable
     }
 
     pub fn rsync_dir_use_symlinks(&self) -> bool {
@@ -164,6 +148,14 @@ impl Config {
         } else {
             false
         }
+    }
+
+    pub fn fetcher(&self) -> Fetcher {
+        Fetcher::new(self.notification_uri.clone(), self.fetch_map.clone())
+    }
+
+    pub fn state_path(&self) -> PathBuf {
+        self.state_dir.join("current.json")
     }
 }
 
@@ -191,13 +183,13 @@ pub fn create_test_config(
         quiet: false,
         force_snapshot: false,
         force_update: false,
-        format: Format::Both,
         pid_file,
         state_dir,
         rrdp_dir,
         rrdp_notify_delay: 0,
         rsync_dir,
         rsync_dir_force_moves: false,
+        rsync_disable: false,
         cleanup_after: 0,
         insecure: false,
         notification_uri,

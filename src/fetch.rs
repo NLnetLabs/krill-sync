@@ -133,6 +133,10 @@ impl Fetcher {
         Fetcher { notification_uri, fetch_map }
     }
 
+    pub fn notification_uri(&self) -> &uri::Https {
+        &self.notification_uri
+    }
+
     pub fn read_notification_file(&self) -> Result<NotificationFile> {
         let snapshot_source = self.resolve_source(&self.notification_uri)?;
         let bytes = snapshot_source.fetch(None)?;
