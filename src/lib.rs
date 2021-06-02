@@ -6,6 +6,9 @@ extern crate anyhow;
 extern crate bytes;
 extern crate rpki;
 
+#[macro_use]
+extern crate serde;
+
 pub mod config;
 pub mod file_ops;
 pub mod process;

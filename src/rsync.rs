@@ -1,18 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow};
-use chrono::Utc;
+use anyhow::{Context, Result};
 
-use rpki::rrdp::PublishElement;
-use rpki::{
-    rrdp::Snapshot,
-    uri,
-};
+use rpki::uri;
 
 use crate::config::{self, Config};
 use crate::file_ops;
-use crate::rrdp::RrdpState;
+use crate::rrdp::{CurrentObject, RrdpState};
 
 fn make_rsync_repo_path(uri: &uri::Rsync) -> PathBuf {
     // Drop the module as the proper module name is determined by and part of
@@ -106,7 +101,7 @@ pub fn build_repo_from_rrdp_snapshot(
 
 fn write_rsync_content(
     out_path: &Path,
-    elements: &[PublishElement],
+    elements: &[CurrentObject],
 ) -> Result<()> {
     for element in elements {
         let path = out_path.join(make_rsync_repo_path(element.uri()));

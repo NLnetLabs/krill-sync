@@ -3,31 +3,34 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 
-use rpki::{rrdp::{self, Delta, Hash, NotificationFile, PublishElement, Snapshot, SnapshotInfo}, uri::Https};
+use rpki::{rrdp::{self, Delta, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot, SnapshotInfo}, uri::{Https, Rsync}};
 use uuid::Uuid;
 
-use crate::{fetch::Fetcher, file_ops};
+use crate::{fetch::Fetcher, file_ops, util};
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RrdpState {
     /// The identifier of the current session of the server.
     ///
     /// Delta updates can only be used if the session ID of the last processed
     /// update matches this value.
+    #[serde(deserialize_with = "util::de_uuid", serialize_with = "util::ser_uuid")]
     session_id: Uuid,
     
     /// The serial number of the most recent update provided by the server.
     ///
     /// Serial numbers increase by one between each update.
     serial: u64,
-
-    /// Current elements as would be found on the last snapshot
-    elements: Vec<PublishElement>,
+    
+    /// Current objects (recovered from snapshot xml at startup)
+    #[serde(skip_serializing)]
+    elements: Vec<CurrentObject>,
 
     /// Current snapshot state (xml, hash, path)
     snapshot: SnapshotState,
 
     /// Delta states (xml, hash, path)
-    deltas: Vec<DeltaState>
+    deltas: Vec<DeltaState>,
 }
 
 impl RrdpState {
@@ -45,7 +48,11 @@ impl RrdpState {
         let snapshot_org = fetcher.read_snapshot_file(snapshot_info.uri(), snapshot_info.hash())?;
         let snapshot = SnapshotState::create(&snapshot_org)?;
         
-        let elements = snapshot_org.into_elements();
+        let elements = snapshot_org
+            .into_elements()
+            .into_iter()
+            .map(|e| e.into())
+            .collect();
 
         let mut deltas = vec![];
         for delta in notification_file.deltas() {
@@ -72,7 +79,7 @@ impl RrdpState {
         self.serial
     }
 
-    pub fn elements(&self) -> &Vec<PublishElement> {
+    pub fn elements(&self) -> &Vec<CurrentObject> {
         &self.elements
     }
 
@@ -106,10 +113,18 @@ impl RrdpState {
         let snapshot_uri = base_uri.join(self.rel_path_snapshot().as_bytes())
             .with_context(|| "Could not derive snapshot URI")?;
         
-        let snapshot_hash = Hash::from_data(self.snapshot.xml.as_ref());
+        let snapshot_hash = self.snapshot.hash();
         let snapshot_info = SnapshotInfo::new(snapshot_uri, snapshot_hash);
     
         let mut deltas = vec![];
+        for delta in &self.deltas {
+            let serial = delta.serial();
+            let hash = delta.hash();
+            let uri = base_uri.join(self.rel_path_delta(serial).as_bytes())
+                .with_context(|| "Could not derive delta URI")?;
+            
+            deltas.push(DeltaInfo::new(serial, uri, hash));
+        }
     
         Ok(NotificationFile::new(
             self.session_id,
@@ -124,7 +139,10 @@ impl RrdpState {
     pub fn write_snapshot(&self, base_path: &Path) -> Result<()> {
         let path = base_path.join(self.rel_path_snapshot());
         info!("Writing RRDP snapshot to {:?}", path);
-        file_ops::write_buf(&path, self.snapshot.xml.as_ref())
+        let xml = self.snapshot.xml().ok_or_else(||
+            anyhow!("Snapshot XML not recovered on startup")
+        )?;
+        file_ops::write_buf(&path, xml)
             .with_context(|| "Could not write snapshot XML")?;
 
         Ok(())
@@ -139,7 +157,10 @@ impl RrdpState {
                 debug!("Skip writing delta file to {:?}", path)
             } else {
                 info!("Write delta file to {:?}", path);
-                file_ops::write_buf(&path, delta.xml.as_ref())
+                let xml = delta.xml().ok_or_else(||
+                    anyhow!("Delta XML not recovered on startup")
+                )?;
+                file_ops::write_buf(&path, xml)
                     .with_context(|| "Could not write delta XML")?;
             }
         }
@@ -157,11 +178,44 @@ impl RrdpState {
 
 }
 
+//------------ CurrentObject -------------------------------------------------
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CurrentObject {
+    uri: Rsync,
+
+    #[serde(deserialize_with = "util::de_bytes", serialize_with = "util::ser_bytes")]
+    data: Bytes,
+}
+
+impl CurrentObject {
+    pub fn uri(&self) -> &Rsync {
+        &self.uri
+    }
+
+    pub fn data(&self) -> &Bytes {
+        &self.data
+    }
+}
+
+impl From<PublishElement> for CurrentObject {
+    fn from(el: PublishElement) -> Self {
+        let (uri, data) = el.unpack();
+        CurrentObject { uri, data }
+    }
+}
+
+//------------ SnapshotState -------------------------------------------------
+
 /// Represents a parsed and thereby reconstructed RRDP snapshot file.
 /// Because the XML is reconstructed we cannot rely on the hash reported in the
 /// original notification file.
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SnapshotState {
-    xml: Bytes,
+    // #[serde(deserialize_with = "util::de_bytes", serialize_with = "util::ser_bytes")]
+    #[serde(skip)]
+    xml: Option<Bytes>,
+    
     hash: rrdp::Hash,
 }
 
@@ -174,18 +228,32 @@ impl SnapshotState {
         let xml: Bytes = bytes.into();
         
         let hash = rrdp::Hash::from_data(xml.as_ref());
+        
+        Ok(SnapshotState { xml: Some(xml), hash })
+    }
 
-        Ok(SnapshotState { xml, hash })
+    pub fn hash(&self) -> Hash {
+        self.hash
+    }
+
+    pub fn xml(&self) -> Option<&Bytes> {
+        self.xml.as_ref()
     }
 }
+
+//------------ DeltaState ----------------------------------------------------
 
 /// Represents a parsed and thereby reconstructed RRDP delta file.
 /// Because the XML is reconstructed we cannot rely on the hash reported in the
 /// original notification file.
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DeltaState {
     serial: u64,
-    xml: Bytes,
+    
     hash: rrdp::Hash,
+
+    #[serde(skip)]
+    xml: Option<Bytes>,
 }
 
 impl DeltaState {
@@ -200,7 +268,19 @@ impl DeltaState {
         
         let hash = rrdp::Hash::from_data(xml.as_ref());
 
-        Ok(DeltaState { serial, xml, hash })
+        Ok(DeltaState { serial, hash, xml: Some(xml) })
+    }
+
+    pub fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    pub fn hash(&self) -> Hash {
+        self.hash
+    }
+
+    pub fn xml(&self) -> Option<&Bytes> {
+        self.xml.as_ref()
     }
 }
 
