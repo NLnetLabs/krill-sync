@@ -1,14 +1,19 @@
 //! Responsible for the main krill-sync process
 
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result};
 
-use crate::{config::Config, fetch::Fetcher, rrdp::RrdpState, rsync};
+use crate::{config::Config, fetch::Fetcher, file_ops, rrdp::RrdpState, rsync};
 
 pub fn process(config: Config) -> Result<()> {
        
     let fetcher = Fetcher::new(config.notification_uri.clone(), config.fetch_map.clone());
     info!("Checking: {}", config.notification_uri);
 
+    let state_path = config.state_dir.join("current.json");
+
+    // TODO: recover rrdp_state from disk if it is present.
+    //       if it is present but unusable... fall back to
+    //       clean or exit? (allow config option for this?)
     let rrdp_state = RrdpState::create(&fetcher)?;
 
     // ===================================================================
@@ -27,18 +32,6 @@ pub fn process(config: Config) -> Result<()> {
     // RRDP notification file because the RRDP XML files contain "uri" attribute
     // values that refer to the locations within the Rsync repository.
     //
-    // Fetching a complete snapshot.xml can take a while for a large repository
-    // Given that even when the snapshot changes that the majority of the
-    // content is the same from one snapshot XML to the next, it's more
-    // efficient to apply deltas to the last snapshot XML to create the new
-    // snapshot XML than it is to download the entire snapshot XML. We want to
-    // be able to update at worst once a minute. It might be much faster over an
-    // internal connection but if it's fast enough over the public Internet it
-    // will be fast enough for now and hopefully in the future too.
-    //
-    // If we don't have a prior snapshot XML or are missing a delta (it's been
-    // too long since we last updated) we will not be able to apply delta
-    // changes to it and thus are forced to download the entire snapshot XML.
     if config.rsync_enabled() {
         rsync::build_repo_from_rrdp_snapshot(
             &rrdp_state,
@@ -54,23 +47,33 @@ pub fn process(config: Config) -> Result<()> {
     // ===================================================
     // Update the local RRDP snapshot and delta XML files.
     // ===================================================
-
+    
     // A normal Relying Party client would only need either the snapshot XML or
     // the delta XMLs, not both, but we need to be able to output copies of both
     // the snapshot and delta XMLs to be served to RP clients.
+    //
     if config.rrdp_enabled() {
         rrdp_state.write_snapshot(&config.rrdp_dir)?;
         rrdp_state.write_missing_deltas(&config.rrdp_dir)?;
-
+        
         if config.rrdp_notify_delay > 0 {
             info!("Waiting {} seconds before writing RRDP notification file", config.rrdp_notify_delay);
             std::thread::sleep(std::time::Duration::from_secs(config.rrdp_notify_delay));
         }
-
+        
         rrdp_state.write_notification(&config.rrdp_dir, &config.notification_uri)?;
-    }    
+    }
+    
+    // ==============
+    // Persist state.
+    // ==============
 
-
+    // This allows future runs to pick up deltas rather than snapshots, and
+    // will allow use to know which files can be safely cleaned up.
+    let json = serde_json::to_string_pretty(&rrdp_state)?;
+    
+    file_ops::write_buf(&state_path, json.as_bytes())
+        .with_context(|| "Could not save state.")?;
     
     Ok(())
 }
