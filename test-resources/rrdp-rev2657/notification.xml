@@ -1,0 +1,8 @@
+<notification xmlns="http://www.ripe.net/rpki/rrdp" version="1" session_id="e9be21e7-c537-4564-b742-64700978c6b4" serial="2657">
+  <snapshot uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/snapshot.xml" hash="38b6e803f2442afb6ad619e13fc6ba95efc76829d8db1b8b837ed97797a7c122" />
+  <delta serial="2657" uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/delta.xml" hash="281f4e8a7967994263d58bab7159af9573e159d6dec78d46df122efe1673353e" />
+  <delta serial="2656" uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml" hash="d88dcae924fd246bcb532d9fd4df61dffe41568fbe1e23d8b2ca192b04fa7e88" />
+  <delta serial="2655" uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml" hash="74c1ae349982162946c7a0d5f88da352749775c2131cc62ddfa5e4bb0cb8ccca" />
+  <delta serial="2654" uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml" hash="ed67a7e5cb0fdc7fdb1411e69925fc1f258e34db61b96366d46959024943c1a4" />
+  <delta serial="2653" uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2653/delta.xml" hash="332b1aea5f964a2a8822141ac25477ee420bf97ebabe800dbc78aec9633b3bd4" />
+</notification>
