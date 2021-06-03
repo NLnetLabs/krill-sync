@@ -1,14 +1,31 @@
+use std::fmt;
+
+use bytes::Bytes;
+use chrono::{Local, TimeZone};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
-use bytes::Bytes;
+//----------------------------------------------------------------------------
+//------------ Time Support --------------------------------------------------
+//----------------------------------------------------------------------------
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Time(i64);
 
-// pub fn human_readable_secs_since_epoch(secs_since_epoch: i64) -> String {
-    // use chrono::{Local, TimeZone};
-    //     Local.timestamp(secs_since_epoch, 0).to_rfc3339()
-    // }
-    
+impl Time {
+    pub fn now() -> Self {
+        let now = Local::now();
+        Time(now.timestamp())
+    }
+}
+
+impl fmt::Display for Time {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let time = Local.timestamp(self.0, 0);
+        write!(f, "{}", time.to_rfc3339())
+    }
+}
+
 //----------------------------------------------------------------------------
 //------------ Serde Support -------------------------------------------------
 //----------------------------------------------------------------------------
@@ -17,7 +34,7 @@ use bytes::Bytes;
 
 pub fn de_bytes<'de, D>(d: D) -> Result<Bytes, D::Error>
 where
-D: Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     let base64_str = String::deserialize(d)?;
     let bytes = base64::decode(&base64_str).map_err(serde::de::Error::custom)?;
@@ -26,7 +43,7 @@ D: Deserializer<'de>,
 
 pub fn ser_bytes<S>(b: &Bytes, s: S) -> Result<S::Ok, S::Error>
 where
-S: Serializer,
+    S: Serializer,
 {
     base64::encode(b).serialize(s)
 }
@@ -35,7 +52,7 @@ S: Serializer,
 
 pub fn de_uuid<'de, D>(d: D) -> Result<Uuid, D::Error>
 where
-D: Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     let uuid_str = String::deserialize(d)?;
     Uuid::parse_str(&uuid_str).map_err(serde::de::Error::custom)
@@ -43,11 +60,10 @@ D: Deserializer<'de>,
 
 pub fn ser_uuid<S>(uuid: &Uuid, s: S) -> Result<S::Ok, S::Error>
 where
-S: Serializer,
+    S: Serializer,
 {
     uuid.to_string().serialize(s)
 }
-
 
 //----------------------------------------------------------------------------
 //------------ Test Support --------------------------------------------------
