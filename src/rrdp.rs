@@ -1,17 +1,9 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::{HashMap, VecDeque}, fs, path::{Path, PathBuf}};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 
-use rpki::{
-    rrdp::{
-        self, Delta, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot, SnapshotInfo,
-    },
-    uri::{Https, Rsync},
-};
+use rpki::{rrdp::{self, Delta, DeltaElement, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot, SnapshotInfo, UpdateElement, WithdrawElement}, uri::{Https, Rsync}};
 use uuid::Uuid;
 
 use crate::{
@@ -42,15 +34,18 @@ pub struct RrdpState {
     /// Serial numbers increase by one between each update.
     serial: u64,
 
-    /// Current objects (recovered from snapshot xml at startup)
+    /// Current objects (not serialized, recovered from snapshot xml at startup)
     #[serde(skip)]
-    elements: Vec<CurrentObject>,
+    current_objects: CurrentObjectMap,
 
     /// Current snapshot state (xml, hash, path)
     snapshot: SnapshotState,
 
     /// Delta states (xml, hash, path)
-    deltas: Vec<DeltaState>,
+    deltas: VecDeque<DeltaState>,
+
+    /// Deprecated files - which may be cleaned up after some time
+    deprecated_files: Vec<DeprecatedFile>,
 }
 
 impl RrdpState {
@@ -60,7 +55,7 @@ impl RrdpState {
         let rrdp_dir = config.rrdp_dir.clone();
 
         let fetcher = config.fetcher();
-        let notification_file = fetcher.read_notification_file()?;
+        let mut notification_file = fetcher.read_notification_file()?;
 
         let session_id = notification_file.session_id();
         let serial = notification_file.serial();
@@ -68,19 +63,21 @@ impl RrdpState {
         let snapshot_info = notification_file.snapshot();
 
         let snapshot_org = fetcher.read_snapshot_file(snapshot_info.uri(), snapshot_info.hash())?;
-        let snapshot = SnapshotState::create(&snapshot_org)?;
+        let current_objects: CurrentObjectMap = snapshot_org.into_elements().into();
 
-        let elements = snapshot_org
-            .into_elements()
-            .into_iter()
-            .map(|e| e.into())
-            .collect();
+        // Recreate a new snapshot and XML to ensure that the order and formatting matches
+        // snapshots derived from applying updates.
+        let snapshot = current_objects.derive_snapshot(session_id, serial);
+        let snapshot = SnapshotState::create(&snapshot)?;
 
-        let mut deltas = vec![];
+        if !notification_file.sort_and_verify_deltas() {
+            return Err(anyhow!("Notification file contained gaps in deltas"));
+        }
+        let mut deltas = VecDeque::new();
         for delta in notification_file.deltas() {
-            let delta = fetcher.read_delta_file(delta.serial(), delta.uri(), delta.hash())?;
+            let delta = fetcher.read_delta_file(delta)?;
             let delta = DeltaState::create(&delta)?;
-            deltas.push(delta);
+            deltas.push_front(delta);
         }
 
         Ok(RrdpState {
@@ -88,9 +85,10 @@ impl RrdpState {
             rrdp_dir,
             session_id,
             serial,
-            elements,
+            current_objects,
             snapshot,
             deltas,
+            deprecated_files: vec![],
         })
     }
 
@@ -124,11 +122,7 @@ impl RrdpState {
         let snapshot = Snapshot::parse(snapshot_bytes.as_ref())
             .with_context(|| format!("Cannot parse snapshot from {:?}", snapshot_path))?;
 
-        self.elements = snapshot
-            .into_elements()
-            .into_iter()
-            .map(|e| e.into())
-            .collect();
+        self.current_objects = snapshot.into_elements().into();
 
         self.snapshot.set_xml(snapshot_bytes);
 
@@ -160,28 +154,138 @@ impl RrdpState {
     ///   Ok(false) if there was no update (serial and session match current)
     ///   Err       if there was an error trying to update
     pub fn update(&mut self, fetcher: &Fetcher) -> Result<bool> {
-        let notification_file = fetcher.read_notification_file()?;
-
-        if notification_file.serial() == self.serial
-            && notification_file.session_id() == self.session_id
-        {
+        let mut notification_file = fetcher.read_notification_file()?;
+        if !notification_file.sort_and_verify_deltas() {
+            Err(anyhow!("Notification file contained gaps in deltas"))
+        } else if notification_file.session_id() != self.session_id {
+            info!("Session reset by source, will apply new snapshot");
+            self.apply_snapshot(notification_file, fetcher)?;
+            Ok(true)
+        } else if notification_file.serial() == self.serial {
+            debug!("No update of RRDP needed at this time");
             Ok(false)
+        } else if notification_file.serial() < self.serial {
+            Err(anyhow!(format!(
+                "The notification file serial '{}' is *before* our serial '{}'",
+                notification_file.serial(),
+                self.serial
+            )))
         } else {
-            // Check whether there are delta since the current serial and session id
-            // if so:
-            // - update using those deltas
-            // - add deltas
-            // - construct new snapshot
-            // - derive new elements
-            // - move old deltas and snapshot to clean up list
+            let has_delta_path = notification_file.deltas().first()
+                .map(|first| first.serial() <= self.serial)
+                .unwrap_or(false);
 
-            // otherwise:
-            // - parse snapshot and new deltas
-            // - derive new elements
-            // - move all old deltas to clean up list
+            if has_delta_path {
+                info!("New notification file found, will apply deltas to local state");
+                self.apply_deltas(notification_file, fetcher)?;
+            } else {
+                info!("New notification file found, cannot apply deltas to local state, will use snapshot");
+                self.apply_snapshot(notification_file, fetcher)?;
+            }
 
-            todo!()
+            Ok(true)
         }
+    }
+
+    /// Update the current state by applying deltas. I.e.:
+    /// - derive new snapshot
+    fn apply_deltas(
+        &mut self,
+        notification_file: NotificationFile,
+        fetcher: &Fetcher,
+    ) -> Result<()> {
+        self.deprecate_snapshot_file();
+
+        let lowest_delta_serial = notification_file
+            .deltas()
+            .first()
+            .ok_or_else(|| anyhow!("Apply deltas was called with an empty delta list"))?
+            .serial();
+    
+        self.deprecate_deltas_before(lowest_delta_serial)?;
+        
+        // Process all deltas. Note we can assume that the caller ordered these
+        // deltas by serial and verified they contain no gaps.
+        for delta_info in notification_file.deltas() {
+            if delta_info.serial() > self.serial {
+                self.apply_delta(delta_info, fetcher)?;
+            }
+        }
+        
+        self.derive_snapshot()?;
+        
+        Ok(())
+    }
+            
+    /// Remove deltas before the given serial and put them on the deprecated file list. 
+    /// 
+    /// Notes:
+    /// - This may be a no-op in case all current deltas are still relevant. In that
+    ///   case this function simply does nothing.
+    /// - This function assumes that `self.deltas` is kept in reverse serial order.
+    fn deprecate_deltas_before(&mut self, before: u64) -> Result<()> {
+        let cut_off_idx_opt = self
+            .deltas
+            .iter()
+            .position(|c| c.serial < before);
+        
+        if let Some(cut_off_idx) = cut_off_idx_opt {
+            let mut delta_serials_remove = vec![];
+            for delta in self.deltas.drain(cut_off_idx..) {
+                delta_serials_remove.push(delta.serial())
+            }
+            for serial in delta_serials_remove {
+                self.deprecate_delta_file(serial);
+            }
+        }
+        
+        Ok(())
+    }
+            
+    /// Download and apply the `Delta` for the given `DeltaInfo`.
+    ///
+    /// Will fail if the Delta:
+    ///  - is not for the next serial
+    ///  - could not be retrieved
+    ///  - does not match the hash
+    ///  - cannot be applied to the current elements:
+    ///      -- remove or update an element which is not present
+    ///      -- add an element which is present
+    fn apply_delta(&mut self, delta_info: &DeltaInfo, fetcher: &Fetcher) -> Result<()> {
+        if self.serial != delta_info.serial() - 1 {
+            Err(anyhow!(format!(
+                "Cannot apply delta for serial '{}' to state serial '{}'",
+                delta_info.serial(),
+                self.serial())))
+        } else {
+            let delta = fetcher.read_delta_file(delta_info)?;
+            let delta_state = DeltaState::create(&delta)?;
+            self.current_objects.apply_delta(delta)?;
+            self.deltas.push_front(delta_state);
+            self.serial += 1;
+            Ok(())
+        }
+    }
+
+    /// Derive the snapshot held by this state
+    pub fn derive_snapshot(&mut self) -> Result<()> {
+        let snapshot = self.current_objects.derive_snapshot(self.session_id, self.serial);
+        self.snapshot = SnapshotState::create(&snapshot)?;
+        Ok(())
+    }
+                
+    /// Update state using a new snapshot
+    /// - move snapshot to clean up list
+    /// - move all current deltas to clean up list
+    /// - parse snapshot and all deltas
+    /// - update the current elements
+    fn apply_snapshot(
+        &mut self,
+        notification_file: NotificationFile,
+        fetcher: &Fetcher,
+    ) -> Result<()> {
+        self.deprecate_snapshot_file();
+        todo!("apply snap")
     }
 
     /// Write out all *missing* RRDP files. Optionally delay writing the notification file for
@@ -218,8 +322,8 @@ impl RrdpState {
         self.serial
     }
 
-    pub fn elements(&self) -> &Vec<CurrentObject> {
-        &self.elements
+    pub fn elements(&self) -> impl Iterator<Item=&CurrentObject> {
+        self.current_objects.objects()
     }
 
     /// Writes the notification file to disk. Will first write to a
@@ -279,6 +383,14 @@ impl RrdpState {
         ))
     }
 
+    /// Marks a snapshot file as deprecated. Assumes that the session id is still unchanged. If the
+    /// there would be a session id reset, then deprecate files for the old session id first, before
+    /// updating the current session id.
+    fn deprecate_snapshot_file(&mut self) {
+        let path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
+        self.deprecated_files.push(DeprecatedFile::new(path));
+    }
+
     /// Writes a new notification file. Will not check whether the file already
     /// exists because this is assumed to be called for new snapshot files only.
     fn write_snapshot(&self) -> Result<()> {
@@ -290,6 +402,14 @@ impl RrdpState {
         file_ops::write_buf(&path, xml).with_context(|| "Could not write snapshot XML")?;
 
         Ok(())
+    }
+
+    /// Marks a delta file as deprecated. Assumes that the session id is still unchanged. If the
+    /// there would be a session id reset, then deprecate files for the old session id first, before
+    /// updating the current session id.
+    fn deprecate_delta_file(&mut self, serial: u64) {
+        let path = Self::path_delta(&self.rrdp_dir, self.session_id(), serial);
+        self.deprecated_files.push(DeprecatedFile::new(path));
     }
 
     /// Writes any deltas for which no current file is found. I.e. it is assumed
@@ -328,16 +448,108 @@ impl RrdpState {
     }
 }
 
+//------------ CurrentObjectMap ----------------------------------------------
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentObjectMap(HashMap<Rsync, CurrentObject>);
+
+impl CurrentObjectMap {
+    /// Derive a new Snapshot. Order the objects by URI.
+    fn derive_snapshot(&self, session: Uuid, serial: u64) -> Snapshot {
+
+        let mut publishes: Vec<PublishElement> = self.0.values().map(|current|
+            PublishElement::new(current.uri().clone(), current.data().clone())
+        ).collect();
+        publishes.sort_by_key(|p| p.uri().to_string());
+        
+        Snapshot::new(session, serial, publishes)
+    }
+
+    /// Apply an RRDP delta to self
+    fn apply_delta(&mut self, delta: Delta) -> Result<()> {
+        for el in delta.into_elements() {
+            match el {
+                DeltaElement::Publish(publish) => self.apply_publish(publish)?,
+                DeltaElement::Update(update) => self.apply_update(update)?,
+                DeltaElement::Withdraw(withdraw) => self.apply_withdraw(withdraw)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_publish(&mut self, publish: PublishElement) -> Result<()> {
+        let object: CurrentObject = publish.into();
+        #[allow(clippy::map_entry)]
+        if self.0.contains_key(object.uri()) {
+            Err(anyhow!(format!("Object with uri '{}' cannot be added (already present)", object.uri())))
+        } else {
+            self.0.insert(object.uri().clone(), object);
+            Ok(())
+        }
+    }
+
+    fn apply_update(&mut self, update: UpdateElement) -> Result<()> {
+        let (uri, replaces, data) = update.unpack();
+        let object = CurrentObject { uri, data };
+
+        let old = self.0.get(object.uri()).ok_or_else(||
+            anyhow!(format!("Object for uri '{}' cannot be updated: not present", object.uri()))
+        )?;
+
+        if old.hash() != replaces {
+            Err(anyhow!(format!("Object for uri '{}' cannot be updated: hash mismatch", object.uri())))
+        } else {
+            self.0.remove(object.uri());
+            self.0.insert(object.uri().clone(), object);
+            Ok(())
+        }
+        
+    }
+
+    fn apply_withdraw(&mut self, withdraw: WithdrawElement) -> Result<()> {
+        let (uri, hash) = withdraw.unpack();
+        
+        let old = self.0.get(&uri).ok_or_else(||
+            anyhow!(format!("Object for uri '{}' cannot be removed: was not present", uri))
+        )?;
+
+        if old.hash() != hash {
+            Err(anyhow!(format!("Object for uri '{}' cannot be withdrawn: hash mismatch", uri)))
+        } else {
+            self.0.remove(&uri);
+            Ok(())
+        }
+        
+    }
+}
+
+impl CurrentObjectMap {
+    pub fn objects(&self) -> impl Iterator<Item=&CurrentObject> {
+        self.0.values()
+    }
+}
+
+impl Default for CurrentObjectMap {
+    fn default() -> Self {
+        CurrentObjectMap(HashMap::new())
+    }
+}
+
+impl From<Vec<PublishElement>> for CurrentObjectMap {
+    fn from(elements: Vec<PublishElement>) -> Self {
+        let mut map = HashMap::new();
+        for el in elements.into_iter() {
+            let current_object: CurrentObject = el.into();
+            map.insert(current_object.uri().clone(), current_object);
+        }
+        CurrentObjectMap(map)
+    }
+}
+
 //------------ CurrentObject -------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CurrentObject {
     uri: Rsync,
-
-    #[serde(
-        deserialize_with = "util::de_bytes",
-        serialize_with = "util::ser_bytes"
-    )]
     data: Bytes,
 }
 
@@ -348,6 +560,10 @@ impl CurrentObject {
 
     pub fn data(&self) -> &Bytes {
         &self.data
+    }
+
+    pub fn hash(&self) -> Hash {
+        Hash::from_data(&self.data)
     }
 }
 
@@ -462,6 +678,15 @@ pub struct DeprecatedFile {
     path: PathBuf,
 }
 
+impl DeprecatedFile {
+    pub fn new(path: PathBuf) -> Self {
+        DeprecatedFile {
+            since: Time::now(),
+            path,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::create_test_config;
@@ -488,12 +713,21 @@ mod tests {
             assert_eq!(state, recovered);
 
             // Update
-            let notification_uri =
-                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+            let notification_uri = https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
             let source_uri_base_2657 = "./test-resources/rrdp-rev2657/";
             let config_2657 = create_test_config(&dir, notification_uri, source_uri_base_2657);
+            
+            recovered.update(&config_2657.fetcher()).unwrap();
+            
+            let from_clean_2657 = RrdpState::create(&config_2657).unwrap();
 
-            // recovered.update(&config_2657.fetcher()).unwrap();
+            assert_ne!(recovered, from_clean_2657); // recovered includes deprecated snapshot
+
+            assert_eq!(recovered.snapshot.hash, from_clean_2657.snapshot.hash);
+
+            let recovered_delta_hashes: Vec<Hash> = recovered.deltas.iter().map(|d|d.hash()).collect();
+            let from_clean_delta_hashes: Vec<Hash> = from_clean_2657.deltas.iter().map(|d|d.hash()).collect();
+            assert_eq!(recovered_delta_hashes, from_clean_delta_hashes);
         })
     }
 }
