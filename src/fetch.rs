@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use bytes::Bytes;
-use rpki::{rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot}, uri::{self, Https}};
+use rpki::{rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot, SnapshotInfo}, uri};
 
 use crate::file_ops;
 
@@ -147,9 +147,9 @@ impl Fetcher {
             .with_context(|| "Failed to parse notification file")
     }
 
-    pub fn read_snapshot_file(&self, uri: &Https, hash: Hash) -> Result<Snapshot> {
-        let snapshot_source = self.resolve_source(uri)?;
-        let snapshot_bytes = snapshot_source.fetch(Some(hash))?;
+    pub fn read_snapshot_file(&self, info: &SnapshotInfo) -> Result<Snapshot> {
+        let snapshot_source = self.resolve_source(info.uri())?;
+        let snapshot_bytes = snapshot_source.fetch(Some(info.hash()))?;
 
         Snapshot::parse(snapshot_bytes.as_ref())
             .with_context(|| "Failed to parse snapshot file")
