@@ -730,6 +730,24 @@ mod tests {
             assert_eq!(recovered_delta_hashes, from_clean_delta_hashes);
         })
     }
+
+    #[test]
+    fn process_update_no_change() {
+        test_with_dir("rrdp_state_process_update_no_change", |dir| {
+            let notification_uri = https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+            let source_uri_base = "./test-resources/rrdp-rev2656/";
+
+            let config = create_test_config(&dir, notification_uri, source_uri_base);
+
+            // Build state from source
+            let state = RrdpState::create(&config).unwrap();
+
+            let mut updated = state.clone();
+            updated.update(&config.fetcher()).unwrap();
+
+            assert_eq!(state, updated);
+        })
+    }
 }
 
 // //------------ RrdpProcessError ----------------------------------------------
