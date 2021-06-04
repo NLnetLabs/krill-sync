@@ -797,6 +797,43 @@ mod tests {
         })
     }
 
+    #[test]
+    fn process_update_session_reset() {
+        test_with_dir("rrdp_state_process_update_no_delta", |dir| {
+            let notification_uri =
+                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+            let source_uri_base = "./test-resources/rrdp-rev2656/";
+
+            let config = create_test_config(&dir, notification_uri, source_uri_base);
+
+            // Build state from source
+            let state = RrdpState::create(&config).unwrap();
+            state.write_rrdp_files(0).unwrap();
+            state.persist(&config.state_path()).unwrap();
+
+            // Recover
+            let mut recovered = RrdpState::recover(&config.state_path()).unwrap();
+            assert_eq!(state, recovered);
+
+            // Update
+            let notification_uri = https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+            let source_uri_base_session_reset = "./test-resources/rrdp-rev2-session-reset/";
+            let config_session_reset = create_test_config(&dir, notification_uri, source_uri_base_session_reset);
+            
+            recovered.update(&config_session_reset.fetcher()).unwrap();
+            
+            let from_clean_session_reset = RrdpState::create(&config_session_reset).unwrap();
+
+            assert_ne!(recovered, from_clean_session_reset); // recovered includes deprecated snapshot
+
+            assert_eq!(recovered.snapshot.hash, from_clean_session_reset.snapshot.hash);
+
+            let recovered_delta_hashes: Vec<Hash> = recovered.deltas.iter().map(|d|d.hash()).collect();
+            let from_clean_delta_hashes: Vec<Hash> = from_clean_session_reset.deltas.iter().map(|d|d.hash()).collect();
+            assert_eq!(recovered_delta_hashes, from_clean_delta_hashes);
+        })
+    }
+
 }
 
 // //------------ RrdpProcessError ----------------------------------------------
