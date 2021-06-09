@@ -799,7 +799,7 @@ mod tests {
 
     #[test]
     fn process_update_session_reset() {
-        test_with_dir("rrdp_state_process_update_no_delta", |dir| {
+        test_with_dir("rrdp_state_process_update_session_reset", |dir| {
             let notification_uri =
                 https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
             let source_uri_base = "./test-resources/rrdp-rev2656/";
