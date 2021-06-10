@@ -43,7 +43,7 @@ pub fn remove_file_and_empty_parent_dirs(path: &Path) -> Result<()> {
 }
 
 pub fn read_file(file_path: &Path) -> Result<Bytes> {
-    debug!("Loading file {:?}", &file_path);
+    trace!("Loading file {:?}", &file_path);
     let mut f = File::open(file_path)?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;

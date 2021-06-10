@@ -7,9 +7,36 @@ use std::{
 use anyhow::{Context, Result};
 
 use bytes::Bytes;
+use reqwest::{StatusCode, blocking::Client};
+use reqwest::header::ETAG;
+
 use rpki::{rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot, SnapshotInfo}, uri};
 
 use crate::file_ops;
+
+//------------ FetchResponse -------------------------------------------------
+enum FetchResponse {
+    Data { bytes: Bytes, etag: Option<String> },
+    UnModified
+}
+
+//------------ NotificationFileResponse --------------------------------------
+pub enum NotificationFileResponse {
+    Data {
+        notification: NotificationFile,
+        etag: Option<String>,
+    },
+    Unmodified
+}
+
+impl NotificationFileResponse {
+    pub fn content(self) -> Result<(NotificationFile, Option<String>)> {
+        match self {
+            NotificationFileResponse::Data { notification, etag } => Ok((notification, etag)),
+            NotificationFileResponse::Unmodified => Err(anyhow!("Cannot get content from unmodified response")),
+        }
+    }
+}
 
 //------------ FetchSource ---------------------------------------------------
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,27 +48,75 @@ pub enum FetchSource {
 impl FetchSource {
     /// Gets the data from the fetch source, and verifies that it matches
     /// the hash - if it is provided.
-    fn fetch(&self, hash: Option<Hash>) -> Result<Bytes> {
-        let bytes = match self {
-            FetchSource::Uri(_) => unimplemented!(),
-            FetchSource::File(path) => file_ops::read_file(path).with_context(|| {
-                format!(
-                    "Failed to read source from path: '{}'",
-                    path.to_string_lossy()
-                )
-            }),
+    fn fetch(&self, hash: Option<Hash>, etag: Option<&String>) -> Result<FetchResponse> {
+        let fetch_response = match self {
+            FetchSource::Uri(uri) => {
+                let mut request_builder = Client::builder()
+                    .build()?
+                    .get(uri.as_str());
+
+                if let Some(etag) = etag {
+                    request_builder = request_builder.header(ETAG, etag);
+                }
+                
+                let response = request_builder.send()
+                    .with_context(|| format!("Could not GET: {}", uri))?;
+
+                match response.status() {
+                    StatusCode::OK => {
+                        let etag = match response.headers().get(ETAG) {
+                            None => None,
+                            Some(header_value) => {
+                                Some(header_value.to_str().with_context(|| "invalid ETAG in response header")?.to_owned())
+                            }
+                        };
+        
+                        let bytes = response.bytes()
+                            .with_context(|| format!("Got no response from '{}' even though the status was OK", uri))?;
+                        
+                        Ok(FetchResponse::Data { bytes, etag })
+                    },
+                    StatusCode::NOT_MODIFIED => {
+                        Ok(FetchResponse::UnModified)
+                    },
+                    _ => {
+                        Err(anyhow!("Got unexpected HTTP response to GET for {}: {}", uri, response.status()))
+                    }
+                }
+
+            },
+            FetchSource::File(path) => {
+                let bytes = file_ops::read_file(path).with_context(|| {
+                    format!(
+                        "Failed to read source from path: '{}'",
+                        path.to_string_lossy()
+                    )
+                })?;
+                Ok(FetchResponse::Data { bytes, etag: None })
+            }
         }?;
+        
         if let Some(hash) = hash {
-            if !hash.matches(bytes.as_ref()) {
-                return Err(anyhow!(
-                    "Data at source: {} does not match hash '{}'",
-                    self,
-                    hash
-                ));
+            if let FetchResponse::Data { bytes, .. } = &fetch_response {
+                if !hash.matches(bytes.as_ref()) {
+                    return Err(anyhow!(
+                        "Data at source: {} does not match hash '{}'",
+                        self,
+                        hash
+                    ));
+                }
             }
         }
 
-        Ok(bytes)
+        Ok(fetch_response)
+    }
+
+    fn fetch_no_etag(&self, hash: Option<Hash>) -> Result<Bytes> {
+        match self.fetch(hash, None)? {
+            FetchResponse::Data { bytes, .. } => Ok(bytes),
+            FetchResponse::UnModified => Err(anyhow!("Got unmodified response to fetch without Etag?!")),
+        }
+
     }
 
     fn join(&self, rel: &str) -> Result<FetchSource> {
@@ -139,20 +214,26 @@ impl Fetcher {
         &self.notification_uri
     }
 
-    pub fn read_notification_file(&self) -> Result<NotificationFile> {
+    pub fn read_notification_file(&self, etag: Option<&String>) -> Result<NotificationFileResponse> {
         let snapshot_source = self.resolve_source(&self.notification_uri)?;
-        let bytes = snapshot_source.fetch(None)?;
-        
-        NotificationFile::parse(bytes.as_ref())
-            .with_context(|| "Failed to parse notification file")
+        let resp = match snapshot_source.fetch(None, etag)? {
+            FetchResponse::Data { bytes, etag } => {
+                let notification =  NotificationFile::parse(bytes.as_ref())
+                    .with_context(|| "Failed to parse notification file")?;
+                NotificationFileResponse::Data { notification, etag }
+            }
+                ,
+            FetchResponse::UnModified => NotificationFileResponse::Unmodified,
+        };
+
+        Ok(resp)
     }
 
     pub fn read_snapshot_file(&self, info: &SnapshotInfo) -> Result<Snapshot> {
         let snapshot_source = self.resolve_source(info.uri())?;
-        let snapshot_bytes = snapshot_source.fetch(Some(info.hash()))?;
+        let bytes = snapshot_source.fetch_no_etag(Some(info.hash()))?;
 
-        Snapshot::parse(snapshot_bytes.as_ref())
-            .with_context(|| "Failed to parse snapshot file")
+        Snapshot::parse(bytes.as_ref()).with_context(|| "Failed to parse snapshot file")
     }
 
     /// Retrieves a delta file, resolving the given URI against the local fetch map
@@ -164,7 +245,7 @@ impl Fetcher {
         let serial = delta_info.serial();
 
         let delta_source = self.resolve_source(uri)?;
-        let delta_bytes = delta_source.fetch(Some(hash))?;
+        let delta_bytes = delta_source.fetch_no_etag(Some(hash))?;
 
         let delta = Delta::parse(delta_bytes.as_ref()).with_context(|| {
             format!(
@@ -192,6 +273,8 @@ impl Fetcher {
         }
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {
