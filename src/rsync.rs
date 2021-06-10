@@ -26,22 +26,27 @@ pub fn update_from_rrdp_state(rrdp_state: &RrdpState, config: &Config) -> Result
         session_id: rrdp_state.session_id(),
         serial: rrdp_state.serial(),
     };
-    
-    write_rsync_content(&new_revision.path(config), rrdp_state.elements())?;
 
-    if config.rsync_dir_use_symlinks() {
-        symlink_current_to_new_revision_dir(&new_revision, config)?;
+    if rsync_state.matches_current(&new_revision) {
+        debug!("rsync files are up to date");
+        Ok(())
     } else {
-        rename_new_revision_dir_to_current(&new_revision, &rsync_state, config)?;
+        write_rsync_content(&new_revision.path(config), rrdp_state.elements())?;
+    
+        if config.rsync_dir_use_symlinks() {
+            symlink_current_to_new_revision_dir(&new_revision, config)?;
+        } else {
+            rename_new_revision_dir_to_current(&new_revision, &rsync_state, config)?;
+        }
+    
+        rsync_state.update_current(new_revision);
+    
+        rsync_state.clean_old(config)?;
+    
+        rsync_state.persist(config)?;
+    
+        Ok(())
     }
-
-    rsync_state.update_current(new_revision);
-
-    rsync_state.clean_old(config)?;
-
-    rsync_state.persist(config)?;
-
-    Ok(())
 }
 
 /// Create a new symlink then rename it. We need to do this because the std library
@@ -161,6 +166,10 @@ impl RsyncDirState {
         let state_path = config.rsync_state_path();
         let json = serde_json::to_string_pretty(&self)?;
         file_ops::write_buf(&state_path, json.as_bytes()).with_context(|| "Could not save state.")
+    }
+
+    fn matches_current(&self, target: &RsyncRevision) -> bool {
+        self.current.as_ref().map(|current| current == target).unwrap_or(false)
     }
 
     /// Updates the current revision for this state, moves a possible

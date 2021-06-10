@@ -7,8 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use bytes::Bytes;
-use reqwest::{StatusCode, blocking::Client};
-use reqwest::header::ETAG;
+use reqwest::{StatusCode, blocking::Client, header::{ETAG, IF_NONE_MATCH}};
 
 use rpki::{rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot, SnapshotInfo}, uri};
 
@@ -56,7 +55,7 @@ impl FetchSource {
                     .get(uri.as_str());
 
                 if let Some(etag) = etag {
-                    request_builder = request_builder.header(ETAG, etag);
+                    request_builder = request_builder.header(IF_NONE_MATCH, etag);
                 }
                 
                 let response = request_builder.send()

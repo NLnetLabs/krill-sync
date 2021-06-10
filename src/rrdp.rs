@@ -115,13 +115,16 @@ impl RrdpState {
         debug!("Recover and verify snapshot for session {} and serial {}", self.session_id(), self.serial());
         let snapshot_path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
         let snapshot_bytes = file_ops::read_file(&snapshot_path)
-        .with_context(|| format!("Cannot read snapshot from {:?}", snapshot_path))?;
+            .with_context(|| format!("Cannot read snapshot from {:?}", snapshot_path))?;
         
+        debug!("Parse snapshot");
         let snapshot = Snapshot::parse(snapshot_bytes.as_ref())
-        .with_context(|| format!("Cannot parse snapshot from {:?}", snapshot_path))?;
+            .with_context(|| format!("Cannot parse snapshot from {:?}", snapshot_path))?;
         
+        debug!("Converting snapshot into elements");
         self.current_objects = snapshot.into_elements().into();
         
+        debug!("Set xml");
         self.snapshot.set_xml(snapshot_bytes);
         
         Ok(())
@@ -154,13 +157,19 @@ impl RrdpState {
     ///   Err       if there was an error trying to update
     pub fn update(&mut self, fetcher: &Fetcher) -> Result<bool> {
         match fetcher.read_notification_file(self.etag.as_ref())? {
-            NotificationFileResponse::Unmodified => Ok(false),
+            NotificationFileResponse::Unmodified => {
+                info!("Notification file was not changed, no updated needed.");
+                Ok(false)
+            },
             NotificationFileResponse::Data { mut notification, etag } => {
                 // If we got a response, then update our local etag. No matter whether we can actually use 
                 // this response, we will have seen it, so there is no point in trying again later.
                 // If the etag is now NONE, but it was set before then we should also forget it locally. This
                 // is a bit strange but perhaps the server just dropped support for etag?
                 self.etag = etag;
+                if let Some(etag) = self.etag.as_ref() {
+                    info!("Received etag: {}", etag);
+                }
 
                 // Now see what we can do with the new notification file.
                 if !notification.sort_and_verify_deltas() {
@@ -172,7 +181,7 @@ impl RrdpState {
                 } else if notification.serial() == self.serial {
                     // Note, this smells like an unmodified notification, but then again the server
                     // may not support etag so we need to check.
-                    debug!("No update of RRDP needed at this time");
+                    info!("No update of RRDP needed at this time");
                     Ok(false)
                 } else if notification.serial() < self.serial {
                     Err(anyhow!(format!(
@@ -440,12 +449,16 @@ impl RrdpState {
     /// exists because this is assumed to be called for new snapshot files only.
     fn write_snapshot(&self) -> Result<()> {
         let path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
-        info!("Writing new snapshot file to {:?}", path);
-        let xml = self
-            .snapshot
-            .xml()
-            .ok_or_else(|| anyhow!("Snapshot XML not recovered on startup"))?;
-        file_ops::write_buf(&path, xml).with_context(|| "Could not write snapshot XML")?;
+        if path.exists() {
+            debug!("Skip writing existing snapshot file to {:?}", path)
+        } else {
+            info!("Writing new snapshot file to {:?}", path);
+            let xml = self
+                .snapshot
+                .xml()
+                .ok_or_else(|| anyhow!("Snapshot XML not recovered on startup"))?;
+            file_ops::write_buf(&path, xml).with_context(|| "Could not write snapshot XML")?;
+        }
 
         Ok(())
     }
@@ -496,7 +509,7 @@ impl RrdpState {
 
 //------------ CurrentObjectMap ----------------------------------------------
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CurrentObjectMap(HashMap<Rsync, CurrentObject>);
+pub struct CurrentObjectMap(HashMap<String, CurrentObject>);
 
 impl CurrentObjectMap {
     /// Create a new CurrentObjectMap by reading and parsing a snapshot file
@@ -533,10 +546,10 @@ impl CurrentObjectMap {
     fn apply_publish(&mut self, publish: PublishElement) -> Result<()> {
         let object: CurrentObject = publish.into();
         #[allow(clippy::map_entry)]
-        if self.0.contains_key(object.uri()) {
+        if self.0.contains_key(object.uri().as_str()) {
             Err(anyhow!(format!("Object with uri '{}' cannot be added (already present)", object.uri())))
         } else {
-            self.0.insert(object.uri().clone(), object);
+            self.0.insert(object.uri().to_string(), object);
             Ok(())
         }
     }
@@ -545,15 +558,14 @@ impl CurrentObjectMap {
         let (uri, replaces, data) = update.unpack();
         let object = CurrentObject { uri, data };
 
-        let old = self.0.get(object.uri()).ok_or_else(||
+        let old = self.0.get(object.uri().as_str()).ok_or_else(||
             anyhow!(format!("Object for uri '{}' cannot be updated: not present", object.uri()))
         )?;
 
         if old.hash() != replaces {
             Err(anyhow!(format!("Object for uri '{}' cannot be updated: hash mismatch", object.uri())))
         } else {
-            self.0.remove(object.uri());
-            self.0.insert(object.uri().clone(), object);
+            self.0.insert(object.uri().to_string(), object);
             Ok(())
         }
         
@@ -562,14 +574,14 @@ impl CurrentObjectMap {
     fn apply_withdraw(&mut self, withdraw: WithdrawElement) -> Result<()> {
         let (uri, hash) = withdraw.unpack();
         
-        let old = self.0.get(&uri).ok_or_else(||
+        let old = self.0.get(uri.as_str()).ok_or_else(||
             anyhow!(format!("Object for uri '{}' cannot be removed: was not present", uri))
         )?;
 
         if old.hash() != hash {
             Err(anyhow!(format!("Object for uri '{}' cannot be withdrawn: hash mismatch", uri)))
         } else {
-            self.0.remove(&uri);
+            self.0.remove(uri.as_str());
             Ok(())
         }
         
@@ -594,7 +606,7 @@ impl From<Vec<PublishElement>> for CurrentObjectMap {
         let mut map = HashMap::new();
         for el in elements.into_iter() {
             let current_object: CurrentObject = el.into();
-            map.insert(current_object.uri().clone(), current_object);
+            map.insert(current_object.uri().to_string(), current_object);
         }
         CurrentObjectMap(map)
     }
