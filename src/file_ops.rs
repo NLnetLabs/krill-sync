@@ -1,13 +1,10 @@
-use anyhow::Context;
-use bytes::Bytes;
-use chrono::Utc;
-use crate::config;
-
-use anyhow::{anyhow, Result};
-
 use std::fs::File;
 use std::io::prelude::*; // for File::write_all()
 use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, Context, Result};
+
+use bytes::Bytes;
 
 pub fn write_buf(file_path: &Path, buf: &[u8]) -> Result<()> {
     let dir = file_path
@@ -25,6 +22,26 @@ pub fn write_buf(file_path: &Path, buf: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub fn remove_file_and_empty_parent_dirs(path: &Path) -> Result<()> {
+
+    if path.is_file() {
+        std::fs::remove_file(path)
+            .with_context(|| format!("Cannot remove file {:?}", path))?;
+    } else if path.is_dir() {
+        std::fs::remove_dir(path)
+            .with_context(|| format!("Cannot remove dir {:?}", path))?;
+    }
+
+    // Recurse to do a 'best effort' removal of the parent if it exists. This
+    // will fail in case it's a non empty directory. That is fine and expected,
+    // it means that we are done.
+    if let Some(parent) = path.parent() {
+        let _ = remove_file_and_empty_parent_dirs(parent);
+    }
+    
+    Ok(())
+}
+
 pub fn read_file(file_path: &Path) -> Result<Bytes> {
     debug!("Loading file {:?}", &file_path);
     let mut f = File::open(file_path)?;
@@ -38,75 +55,3 @@ pub fn path_with_extension(path: &Path, ext: &str) -> PathBuf {
     res.set_extension(ext);
     res
 }
-
-// Assumes that the old data is named XXX and the new data is named XXX.tmp.
-fn install_using_moves(
-    final_path: &Path,
-    is_dir: bool,
-    keep_with_extension: Option<String>,
-) -> Result<()> {
-    // This path represents the new data
-    let new_path = path_with_extension(final_path, config::TMP_FILE_EXT);
-
-    let delete_after = keep_with_extension.is_none();
-
-    // Determine where the current (old) data will be moved out of the way to
-    // Don't lose the original extension.
-    let old_extension = keep_with_extension.unwrap_or_else(|| config::OLD_FILE_EXT.to_string());
-
-    let old_path_str = {
-        let final_path_str = final_path.to_string_lossy();
-        let final_path_str = final_path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
-        let old_path_str = format!("{}.{}", &final_path_str, old_extension);
-        let old_path = Path::new(&old_path_str);
-
-        // The destination for the current data that will be moved out of the way to
-        // the "old" location should be free. If not, append a timestamp to the name
-        // we will move to to make it unique. We don't want to delete old data as
-        // clients may still be transferring it so we manage the deletion at the
-        // right time in the cleanup module.
-        if (is_dir && old_path.is_dir()) || (!is_dir && old_path.is_file()) {
-            format!("{}_{}", &old_path.to_string_lossy(), Utc::now().timestamp())
-        } else {
-            old_path_str
-        }
-    };
-    let old_path = Path::new(&old_path_str);
-
-    if !final_path.exists() {
-        trace!("Move {:?} -> {:?}", &new_path, &final_path);
-    } else {
-        trace!("Move {:?} -> {:?} -> {:?}", &new_path, &final_path, &old_path);
-    }
-
-    // Move old data out of the way
-    if (is_dir && final_path.is_dir()) || (!is_dir && final_path.is_file()) {
-        trace!("Moving old data from {:?} to {:?}", &final_path, &old_extension);
-        std::fs::rename(&final_path, &old_path)?;
-    }
-
-    // Move new data to final home
-    std::fs::rename(&new_path, &final_path)?;
-
-    if delete_after {
-        // Remove old data, if any
-        if is_dir {
-            if old_path.is_dir() {
-                std::fs::remove_dir_all(&old_path)?;
-            }
-        } else if old_path.is_file() {
-            std::fs::remove_file(&old_path)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Installs the new 
-pub fn install_new_dir(final_path: &Path, keep_with_extension: String) -> Result<()> {
-    install_using_moves(final_path, true, Some(keep_with_extension))
-}
-
-// pub fn install_new_file(final_path: &Path, keep_with_extension: String) -> Result<()> {
-//     install_using_moves(final_path, false, Some(keep_with_extension))
-// }
