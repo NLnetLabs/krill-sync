@@ -167,9 +167,6 @@ impl RrdpState {
                 // If the etag is now NONE, but it was set before then we should also forget it locally. This
                 // is a bit strange but perhaps the server just dropped support for etag?
                 self.etag = etag;
-                if let Some(etag) = self.etag.as_ref() {
-                    info!("Received etag: {}", etag);
-                }
 
                 // Now see what we can do with the new notification file.
                 if !notification.sort_and_verify_deltas() {
@@ -344,12 +341,11 @@ impl RrdpState {
     /// Cleans deprecated files and their parent directories if they are empty
     pub fn clean(&mut self, config: &Config) -> Result<()> {
         let clean_before = Time::seconds_ago(config.cleanup_after);
-        info!("Will clean up RRDP files deprecated before {}", clean_before);
 
         for deprecated in self.deprecated_files.iter().filter(|d| d.since < clean_before ) {
             let path = &deprecated.path;
             if path.exists() {
-                debug!("Removing deprecated RRDP file: {:?}", path);
+                info!("Removing RRDP file: {:?}, deprecated since: {}", path, deprecated.since);
                 file_ops::remove_file_and_empty_parent_dirs(path)?;
             }
         }
@@ -452,7 +448,7 @@ impl RrdpState {
         if path.exists() {
             debug!("Skip writing existing snapshot file to {:?}", path)
         } else {
-            info!("Writing new snapshot file to {:?}", path);
+            info!("Writing snapshot file to {:?}", path);
             let xml = self
                 .snapshot
                 .xml()
@@ -479,7 +475,7 @@ impl RrdpState {
             if path.exists() {
                 debug!("Skip writing delta file to {:?}", path)
             } else {
-                info!("Write delta file to {:?}", path);
+                info!("Writing delta file to {:?}", path);
                 let xml = delta
                     .xml()
                     .ok_or_else(|| anyhow!("Delta XML not recovered on startup"))?;

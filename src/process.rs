@@ -12,9 +12,10 @@ pub fn process(config: Config) -> Result<()> {
     //  - recover and update if prior state exists; or
     //  - create a new state based on config
     // ===================================================================
+    let mut changed = true;
     let mut rrdp_state = if config.state_path().exists() {
         let mut recovered = RrdpState::recover(&config.state_path())?;
-        recovered.update(&config.fetcher())?;
+        changed = recovered.update(&config.fetcher())?;
         recovered
     } else {
         RrdpState::create(&config)?
@@ -43,7 +44,7 @@ pub fn process(config: Config) -> Result<()> {
     //
     // We will also clean out old rsync directories if they had been deprecated
     // for more than the 'cleanup_after' time.
-    if config.rsync_enabled() {
+    if changed && config.rsync_enabled() {
         rsync::update_from_rrdp_state(&rrdp_state, &config)?;
     }
 
@@ -53,7 +54,9 @@ pub fn process(config: Config) -> Result<()> {
 
     // This will write the new snapshot and and any missing delta files to disk
     // first, and then updates the notification file after a configurable delay.
-    rrdp_state.write_rrdp_files(config.rrdp_notify_delay)?;
+    if changed {
+        rrdp_state.write_rrdp_files(config.rrdp_notify_delay)?;
+    }
 
     // Clean up any RRDP files and empty parent directories if they had been
     // deprecated for more than the configured 'cleanup_after' time.
