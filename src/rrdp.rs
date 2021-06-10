@@ -6,12 +6,7 @@ use bytes::Bytes;
 use rpki::{rrdp::{self, Delta, DeltaElement, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot, SnapshotInfo, UpdateElement, WithdrawElement}, uri::{Https, Rsync}};
 use uuid::Uuid;
 
-use crate::{
-    config::Config,
-    fetch::Fetcher,
-    file_ops,
-    util::{self, Time},
-};
+use crate::{config::Config, fetch::{Fetcher, NotificationFileResponse}, file_ops, util::{self, Time}};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RrdpState {
@@ -21,6 +16,9 @@ pub struct RrdpState {
 
     /// Base path to where the RRDP files should be saved
     rrdp_dir: PathBuf,
+
+    /// The last seen notification file etag (if seen and if set in response)
+    etag: Option<String>,
 
     /// The identifier of the current session of the server.
     ///
@@ -51,11 +49,13 @@ pub struct RrdpState {
 impl RrdpState {
     /// Build up a new RrdpState, i.e. without prior state.
     pub fn create(config: &Config) -> Result<Self> {
+        info!("No prior state found, will build up state from latest snapshot at source");
         let notification_uri = config.notification_uri.clone();
         let rrdp_dir = config.rrdp_dir.clone();
 
         let fetcher = config.fetcher();
-        let mut notification_file = fetcher.read_notification_file()?;
+
+        let (mut notification_file, etag) = fetcher.read_notification_file(None)?.content()?;
 
         let session_id = notification_file.session_id();
         let serial = notification_file.serial();
@@ -72,9 +72,12 @@ impl RrdpState {
 
         let deltas = Self::read_deltas(notification_file.deltas(), &fetcher)?;
 
+        info!("Done building up state");
+
         Ok(RrdpState {
             notification_uri,
             rrdp_dir,
+            etag,
             session_id,
             serial,
             current_objects,
@@ -87,6 +90,7 @@ impl RrdpState {
     /// Recover from disk. Reads the last known state from disk and re-parses the current snapshot
     /// and all delta files. Returns an error if any of this fails.
     pub fn recover(state_path: &Path) -> Result<Self> {
+        debug!("Recovering prior state");
         let json_bytes = file_ops::read_file(state_path)
             .with_context(|| format!("Cannot read state file at: {:?}", state_path))?;
 
@@ -103,29 +107,32 @@ impl RrdpState {
         recovered.recover_snapshot()?;
         recovered.recover_deltas()?;
 
+        debug!("Done recovering prior state");
         Ok(recovered)
     }
 
     fn recover_snapshot(&mut self) -> Result<()> {
+        debug!("Recover and verify snapshot for session {} and serial {}", self.session_id(), self.serial());
         let snapshot_path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
         let snapshot_bytes = file_ops::read_file(&snapshot_path)
-            .with_context(|| format!("Cannot read snapshot from {:?}", snapshot_path))?;
-
+        .with_context(|| format!("Cannot read snapshot from {:?}", snapshot_path))?;
+        
         let snapshot = Snapshot::parse(snapshot_bytes.as_ref())
-            .with_context(|| format!("Cannot parse snapshot from {:?}", snapshot_path))?;
-
+        .with_context(|| format!("Cannot parse snapshot from {:?}", snapshot_path))?;
+        
         self.current_objects = snapshot.into_elements().into();
-
+        
         self.snapshot.set_xml(snapshot_bytes);
-
+        
         Ok(())
     }
-
+    
     fn recover_deltas(&mut self) -> Result<()> {
         let base_dir = self.rrdp_dir.clone();
         let session = self.session_id();
-
+        
         for delta in self.deltas.iter_mut() {
+            debug!("Recover and verify delta for session {} and serial {}", session, delta.serial);
             let delta_path = Self::path_delta(&base_dir, session, delta.serial);
 
             let delta_bytes = file_ops::read_file(&delta_path)
@@ -146,37 +153,52 @@ impl RrdpState {
     ///   Ok(false) if there was no update (serial and session match current)
     ///   Err       if there was an error trying to update
     pub fn update(&mut self, fetcher: &Fetcher) -> Result<bool> {
-        let mut notification_file = fetcher.read_notification_file()?;
-        if !notification_file.sort_and_verify_deltas() {
-            Err(anyhow!("Notification file contained gaps in deltas"))
-        } else if notification_file.session_id() != self.session_id {
-            info!("Session reset by source, will apply new snapshot");
-            self.apply_snapshot(notification_file, fetcher)?;
-            Ok(true)
-        } else if notification_file.serial() == self.serial {
-            debug!("No update of RRDP needed at this time");
-            Ok(false)
-        } else if notification_file.serial() < self.serial {
-            Err(anyhow!(format!(
-                "The notification file serial '{}' is *before* our serial '{}'",
-                notification_file.serial(),
-                self.serial
-            )))
-        } else {
-            let has_delta_path = notification_file.deltas().first()
-                .map(|first| first.serial() <= self.serial)
-                .unwrap_or(false);
+        match fetcher.read_notification_file(self.etag.as_ref())? {
+            NotificationFileResponse::Unmodified => Ok(false),
+            NotificationFileResponse::Data { mut notification, etag } => {
+                // If we got a response, then update our local etag. No matter whether we can actually use 
+                // this response, we will have seen it, so there is no point in trying again later.
+                // If the etag is now NONE, but it was set before then we should also forget it locally. This
+                // is a bit strange but perhaps the server just dropped support for etag?
+                self.etag = etag;
 
-            if has_delta_path {
-                info!("New notification file found, will apply deltas to local state");
-                self.apply_deltas(notification_file, fetcher)?;
-            } else {
-                info!("New notification file found, cannot apply deltas to local state, will use snapshot");
-                self.apply_snapshot(notification_file, fetcher)?;
-            }
-
-            Ok(true)
+                // Now see what we can do with the new notification file.
+                if !notification.sort_and_verify_deltas() {
+                    Err(anyhow!("Notification file contained gaps in deltas"))
+                } else if notification.session_id() != self.session_id {
+                    info!("Session reset by source, will apply new snapshot");
+                    self.apply_snapshot(notification, fetcher)?;
+                    Ok(true)
+                } else if notification.serial() == self.serial {
+                    // Note, this smells like an unmodified notification, but then again the server
+                    // may not support etag so we need to check.
+                    debug!("No update of RRDP needed at this time");
+                    Ok(false)
+                } else if notification.serial() < self.serial {
+                    Err(anyhow!(format!(
+                        "The notification file serial '{}' is *before* our serial '{}'",
+                        notification.serial(),
+                        self.serial
+                    )))
+                } else {
+                    let has_delta_path = notification.deltas().first()
+                        .map(|first| first.serial() <= self.serial)
+                        .unwrap_or(false);
+        
+                    if has_delta_path {
+                        info!("New notification file found, will apply deltas to local state");
+                        self.apply_deltas(notification, fetcher)?;
+                    } else {
+                        info!("New notification file found, cannot apply deltas to local state, will use snapshot");
+                        self.apply_snapshot(notification, fetcher)?;
+                    }
+        
+                    Ok(true)
+                }
+            },
         }
+
+        
     }
 
     /// Update the current state by applying deltas.
@@ -264,6 +286,7 @@ impl RrdpState {
         let mut res = VecDeque::new();
 
         for delta in deltas {
+            debug!("Read delta from {}", delta.uri());
             let delta = fetcher.read_delta_file(delta)?;
             let delta = DeltaState::create(&delta);
             res.push_front(delta);
@@ -478,6 +501,7 @@ pub struct CurrentObjectMap(HashMap<Rsync, CurrentObject>);
 impl CurrentObjectMap {
     /// Create a new CurrentObjectMap by reading and parsing a snapshot file
     fn read_snapshot(info: &SnapshotInfo, fetcher: &Fetcher) -> Result<Self> {
+        debug!("Reading snapshot from {}", info.uri());
         let snapshot = fetcher.read_snapshot_file(info)?;
         Ok(snapshot.into_elements().into())
     }

@@ -5,6 +5,7 @@ extern crate log;
 extern crate anyhow;
 extern crate bytes;
 extern crate chrono;
+extern crate reqwest;
 extern crate rpki;
 
 #[macro_use]
