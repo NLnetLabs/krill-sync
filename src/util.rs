@@ -9,13 +9,23 @@ use uuid::Uuid;
 //------------ Time Support --------------------------------------------------
 //----------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialOrd, PartialEq, Serialize)]
 pub struct Time(i64);
 
 impl Time {
     pub fn now() -> Self {
         let now = Local::now();
         Time(now.timestamp())
+    }
+
+    pub fn seconds_ago(seconds: i64) -> Self {
+        let mut now = Self::now();
+        now.0 -= seconds;
+        now
+    }
+
+    pub fn timestamp(&self) -> i64 {
+        self.0
     }
 }
 

@@ -304,8 +304,25 @@ impl RrdpState {
             );
             std::thread::sleep(std::time::Duration::from_secs(notify_delay));
         }
-
         self.write_notification()?;
+
+        Ok(())
+    }
+
+    /// Cleans deprecated files and their parent directories if they are empty
+    pub fn clean(&mut self, config: &Config) -> Result<()> {
+        let clean_before = Time::seconds_ago(config.cleanup_after);
+        info!("Will clean up RRDP files deprecated before {}", clean_before);
+
+        for deprecated in self.deprecated_files.iter().filter(|d| d.since < clean_before ) {
+            let path = &deprecated.path;
+            if path.exists() {
+                debug!("Removing deprecated RRDP file: {:?}", path);
+                file_ops::remove_file_and_empty_parent_dirs(path)?;
+            }
+        }
+
+        self.deprecated_files.retain(|d| d.since > clean_before);
 
         Ok(())
     }
@@ -335,6 +352,8 @@ impl RrdpState {
     pub fn write_notification(&self) -> Result<()> {
         let tmp_path = self.rrdp_dir.join(".notification.xml");
         let final_path = self.rrdp_dir.join("notification.xml");
+
+        info!("Updating notification file at {:?}", final_path);
 
         let notification = self.make_notification_file()?;
 
@@ -398,6 +417,7 @@ impl RrdpState {
     /// exists because this is assumed to be called for new snapshot files only.
     fn write_snapshot(&self) -> Result<()> {
         let path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
+        info!("Writing new snapshot file to {:?}", path);
         let xml = self
             .snapshot
             .xml()
@@ -546,6 +566,7 @@ impl Default for CurrentObjectMap {
 
 impl From<Vec<PublishElement>> for CurrentObjectMap {
     fn from(elements: Vec<PublishElement>) -> Self {
+        #[allow(clippy::mutable_key_type)]
         let mut map = HashMap::new();
         for el in elements.into_iter() {
             let current_object: CurrentObject = el.into();

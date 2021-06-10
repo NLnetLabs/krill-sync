@@ -20,7 +20,7 @@ pub const OLD_FILE_EXT: &str = "old";
 pub const USER_AGENT: &str = concat!(crate_name!(), "/", crate_version!());
 
 /// The default number of seconds after we have published a snapshot or delta
-/// that it becomes, if unreferenced, elligble for cleanup.
+/// that it becomes, if unreferenced, eligible for cleanup.
 pub const DEFAULT_CLEANUP_SECONDS: &str = "600"; // 10 minutes
 
 /// The default location to write our process ID to so that on invocation we can
@@ -150,12 +150,20 @@ impl Config {
         }
     }
 
+    pub fn rsync_dir_current(&self) -> PathBuf {
+        self.rsync_dir.join("current")
+    }
+
     pub fn fetcher(&self) -> Fetcher {
         Fetcher::new(self.notification_uri.clone(), self.fetch_map.clone())
     }
 
     pub fn state_path(&self) -> PathBuf {
-        self.state_dir.join("current.json")
+        self.state_dir.join("rrdp-state.json")
+    }
+    
+    pub fn rsync_state_path(&self) -> PathBuf {
+        self.state_dir.join("rsync-state.json")
     }
 }
 
@@ -190,7 +198,7 @@ pub fn create_test_config(
         rsync_dir,
         rsync_dir_force_moves: false,
         rsync_disable: false,
-        cleanup_after: 0,
+        cleanup_after: 2,
         insecure: false,
         notification_uri,
         source_uri_base: Some(source_uri_base),
