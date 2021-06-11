@@ -427,8 +427,7 @@ impl RrdpState {
         let notification = self.make_notification_file()?;
 
         let mut bytes: Vec<u8> = vec![];
-        let mut writer = rpki::xml::encode::Writer::new_with_indent(&mut bytes);
-        notification.to_xml(&mut writer)?;
+        notification.write_xml(&mut bytes)?;
 
         file_ops::write_buf(&tmp_path, &bytes)
             .with_context(|| "Could not write temporary notification file")?;
@@ -709,8 +708,7 @@ pub struct SnapshotState {
 impl SnapshotState {
     fn create(snapshot: &Snapshot) -> Self {
         let mut bytes: Vec<u8> = vec![];
-        let mut writer = rpki::xml::encode::Writer::new_with_indent(&mut bytes);
-        snapshot.to_xml(&mut writer).unwrap(); // cannot fail
+        snapshot.write_xml(&mut bytes).unwrap(); // cannot fail
         let xml: Bytes = bytes.into();
 
         let since = Time::now();
@@ -757,8 +755,7 @@ impl DeltaState {
         let serial = delta.serial();
 
         let mut bytes: Vec<u8> = vec![];
-        let mut writer = rpki::xml::encode::Writer::new_with_indent(&mut bytes);
-        delta.to_xml(&mut writer).unwrap(); // cannot fail
+        delta.write_xml(&mut bytes).unwrap(); // cannot fail
         let xml: Bytes = bytes.into();
 
         let hash = rrdp::Hash::from_data(xml.as_ref());
