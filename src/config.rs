@@ -42,7 +42,6 @@ pub const DEFAULT_RSYNC_DIR: &str = concat!("/var/lib/", crate_name!(), "/rsync"
 /// See: https://www.pathname.com/fhs/pub/fhs-2.3.html#VARLIBVARIABLESTATEINFORMATION
 pub const DEFAULT_STATE_DIR: &str = concat!("/var/lib/", crate_name!());
 
-
 trait Replace {
     fn replace(&self, from_str: &str, to: &Path) -> PathBuf;
 }
@@ -130,7 +129,10 @@ pub struct Config {
     /// Note: For Krill and RIPE NCC - snapshots and deltas can always be found in subdirectories
     ///        **under** the base dir of the notification file. However, we may want to revisit this
     ///        configuration in future to allow for explicit mapping of multiple URI paths.
-    #[structopt(long = "source_uri_base", value_name = "alternate fetch base uri or dir for notification uri")]
+    #[structopt(
+        long = "source_uri_base",
+        value_name = "alternate fetch base uri or dir for notification uri"
+    )]
     pub source_uri_base: Option<FetchSource>,
 
     #[structopt(skip)]
@@ -161,7 +163,7 @@ impl Config {
     pub fn state_path(&self) -> PathBuf {
         self.state_dir.join("rrdp-state.json")
     }
-    
+
     pub fn rsync_state_path(&self) -> PathBuf {
         self.state_dir.join("rsync-state.json")
     }
@@ -176,9 +178,8 @@ pub fn configure() -> Result<Config> {
 pub fn create_test_config(
     work_dir: &Path,
     notification_uri: Https,
-    source_uri_base: &str
+    source_uri_base: &str,
 ) -> Config {
-
     let source_uri_base = FetchSource::File(PathBuf::from(source_uri_base));
 
     let state_dir = work_dir.join("state");
@@ -210,13 +211,16 @@ pub fn create_test_config(
 pub fn post_configure(mut config: Config) -> Result<Config> {
     initialize_logging(&config);
 
-    let base_uri = config.notification_uri.parent().ok_or_else(||
-        anyhow!("Notification URI should contain a path to a file")
-    )?;
+    let base_uri = config
+        .notification_uri
+        .parent()
+        .ok_or_else(|| anyhow!("Notification URI should contain a path to a file"))?;
 
     if let Some(base_fetch) = config.source_uri_base.as_ref().cloned() {
-        if ! base_fetch.is_dir() {
-            return Err(anyhow!("source_uri_dir is not a readable dir or base path ending in a slash"));
+        if !base_fetch.is_dir() {
+            return Err(anyhow!(
+                "source_uri_dir is not a readable dir or base path ending in a slash"
+            ));
         } else {
             config.fetch_map = Some(FetchMap::new(base_uri, base_fetch))
         }
@@ -231,10 +235,14 @@ pub fn post_configure(mut config: Config) -> Result<Config> {
     // occurrences).
     if config.state_dir != Path::new(DEFAULT_STATE_DIR) {
         if config.rrdp_dir == Path::new(DEFAULT_RRDP_DIR) {
-            config.rrdp_dir = config.rrdp_dir.replace(DEFAULT_STATE_DIR, &config.state_dir);
+            config.rrdp_dir = config
+                .rrdp_dir
+                .replace(DEFAULT_STATE_DIR, &config.state_dir);
         }
         if config.rsync_dir == Path::new(DEFAULT_RSYNC_DIR) {
-            config.rsync_dir = config.rsync_dir.replace(DEFAULT_STATE_DIR, &config.state_dir);
+            config.rsync_dir = config
+                .rsync_dir
+                .replace(DEFAULT_STATE_DIR, &config.state_dir);
         }
     }
 

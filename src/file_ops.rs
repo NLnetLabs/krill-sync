@@ -1,17 +1,18 @@
-use std::fs::File;
-use std::io::prelude::*; // for File::write_all()
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::prelude::*, // for File::write_all()
+    path::{Path, PathBuf},
+};
 
 use anyhow::{anyhow, Context, Result};
-
 use bytes::Bytes;
 
 pub fn write_buf(file_path: &Path, buf: &[u8]) -> Result<()> {
     let dir = file_path
         .parent()
         .ok_or_else(|| anyhow!("Error determining parent of {:?}", file_path))?;
-    
-        std::fs::create_dir_all(&dir)
+
+    std::fs::create_dir_all(&dir)
         .with_context(|| format!("Cannot create dir {:?} for file {:?}", &dir, &file_path))?;
 
     std::fs::File::create(file_path)
@@ -23,13 +24,10 @@ pub fn write_buf(file_path: &Path, buf: &[u8]) -> Result<()> {
 }
 
 pub fn remove_file_and_empty_parent_dirs(path: &Path) -> Result<()> {
-
     if path.is_file() {
-        std::fs::remove_file(path)
-            .with_context(|| format!("Cannot remove file {:?}", path))?;
+        std::fs::remove_file(path).with_context(|| format!("Cannot remove file {:?}", path))?;
     } else if path.is_dir() {
-        std::fs::remove_dir(path)
-            .with_context(|| format!("Cannot remove dir {:?}", path))?;
+        std::fs::remove_dir(path).with_context(|| format!("Cannot remove dir {:?}", path))?;
     }
 
     // Recurse to do a 'best effort' removal of the parent if it exists. This
@@ -38,7 +36,7 @@ pub fn remove_file_and_empty_parent_dirs(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         let _ = remove_file_and_empty_parent_dirs(parent);
     }
-    
+
     Ok(())
 }
 
