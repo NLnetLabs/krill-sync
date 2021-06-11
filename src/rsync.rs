@@ -19,7 +19,7 @@ fn make_rsync_repo_path(uri: &uri::Rsync) -> PathBuf {
     PathBuf::from_str(uri.path()).unwrap() // cannot fail (Infallible)
 }
 
-pub fn update_from_rrdp_state(rrdp_state: &RrdpState, config: &Config) -> Result<()> {
+pub fn update_from_rrdp_state(rrdp_state: &RrdpState, changed: bool, config: &Config) -> Result<()> {
     let mut rsync_state = RsyncDirState::recover(config)?;
 
     let new_revision = RsyncRevision {
@@ -27,10 +27,7 @@ pub fn update_from_rrdp_state(rrdp_state: &RrdpState, config: &Config) -> Result
         serial: rrdp_state.serial(),
     };
 
-    if rsync_state.matches_current(&new_revision) {
-        debug!("rsync files are up to date");
-        Ok(())
-    } else {
+    if changed {
         write_rsync_content(&new_revision.path(config), rrdp_state.elements())?;
     
         if config.rsync_dir_use_symlinks() {
@@ -40,13 +37,12 @@ pub fn update_from_rrdp_state(rrdp_state: &RrdpState, config: &Config) -> Result
         }
     
         rsync_state.update_current(new_revision);
-    
-        rsync_state.clean_old(config)?;
-    
-        rsync_state.persist(config)?;
-    
-        Ok(())
     }
+    
+    rsync_state.clean_old(config)?;
+    rsync_state.persist(config)?;
+
+    Ok(())
 }
 
 /// Create a new symlink then rename it. We need to do this because the std library
@@ -128,7 +124,7 @@ fn rename_new_revision_dir_to_current(
 }
 
 fn write_rsync_content<'a>(out_path: &Path, elements: impl Iterator<Item=&'a CurrentObject>) -> Result<()> {
-    debug!("Writing rsync repository to: {:?}", out_path);
+    info!("Writing rsync repository to: {:?}", out_path);
     for element in elements {
         let path = out_path.join(make_rsync_repo_path(element.uri()));
         trace!("Writing rsync file {:?}", &path);
@@ -168,10 +164,6 @@ impl RsyncDirState {
         file_ops::write_buf(&state_path, json.as_bytes()).with_context(|| "Could not save state.")
     }
 
-    fn matches_current(&self, target: &RsyncRevision) -> bool {
-        self.current.as_ref().map(|current| current == target).unwrap_or(false)
-    }
-
     /// Updates the current revision for this state, moves a possible
     /// existing current state to old.
     fn update_current(&mut self, current: RsyncRevision) {
@@ -193,6 +185,7 @@ impl RsyncDirState {
 
                 let path = old.revision.path(config);
                 if path.exists() {
+                    info!("Removing rsync directory: {:?}, deprecated since: {}", path, old.since);
                     // Try to remove the old directory if it still exists
                     std::fs::remove_dir_all(&path)
                         .with_context(|| 

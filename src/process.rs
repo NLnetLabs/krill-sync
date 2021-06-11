@@ -44,8 +44,8 @@ pub fn process(config: Config) -> Result<()> {
     //
     // We will also clean out old rsync directories if they had been deprecated
     // for more than the 'cleanup_after' time.
-    if changed && config.rsync_enabled() {
-        rsync::update_from_rrdp_state(&rrdp_state, &config)?;
+    if config.rsync_enabled() {
+        rsync::update_from_rrdp_state(&rrdp_state, changed, &config)?;
     }
 
     // ============================
