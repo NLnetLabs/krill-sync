@@ -107,7 +107,7 @@ impl RrdpState {
         recovered.recover_snapshot()?;
         recovered.recover_deltas()?;
 
-        debug!("Done recovering prior state");
+        info!("Recovered prior state => session: {}, serial: {}", recovered.session_id(), recovered.serial());
         Ok(recovered)
     }
 
@@ -275,6 +275,7 @@ impl RrdpState {
                 delta_info.serial(),
                 self.serial())))
         } else {
+            info!("Applying delta for serial: {}", delta_info.serial());
             let delta = fetcher.read_delta_file(delta_info)?;
             let delta_state = DeltaState::create(&delta);
             self.current_objects.apply_delta(delta)?;
