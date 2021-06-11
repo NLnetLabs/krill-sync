@@ -5,18 +5,24 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-
 use bytes::Bytes;
-use reqwest::{StatusCode, blocking::Client, header::{ETAG, IF_NONE_MATCH}};
+use reqwest::{
+    blocking::Client,
+    header::{ETAG, IF_NONE_MATCH},
+    StatusCode,
+};
 
-use rpki::{rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot, SnapshotInfo}, uri};
+use rpki::{
+    rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot, SnapshotInfo},
+    uri,
+};
 
 use crate::file_ops;
 
 //------------ FetchResponse -------------------------------------------------
 enum FetchResponse {
     Data { bytes: Bytes, etag: Option<String> },
-    UnModified
+    UnModified,
 }
 
 //------------ NotificationFileResponse --------------------------------------
@@ -25,14 +31,16 @@ pub enum NotificationFileResponse {
         notification: NotificationFile,
         etag: Option<String>,
     },
-    Unmodified
+    Unmodified,
 }
 
 impl NotificationFileResponse {
     pub fn content(self) -> Result<(NotificationFile, Option<String>)> {
         match self {
             NotificationFileResponse::Data { notification, etag } => Ok((notification, etag)),
-            NotificationFileResponse::Unmodified => Err(anyhow!("Cannot get content from unmodified response")),
+            NotificationFileResponse::Unmodified => {
+                Err(anyhow!("Cannot get content from unmodified response"))
+            }
         }
     }
 }
@@ -50,40 +58,45 @@ impl FetchSource {
     fn fetch(&self, hash: Option<Hash>, etag: Option<&String>) -> Result<FetchResponse> {
         let fetch_response = match self {
             FetchSource::Uri(uri) => {
-                let mut request_builder = Client::builder()
-                    .build()?
-                    .get(uri.as_str());
+                let mut request_builder = Client::builder().build()?.get(uri.as_str());
 
                 if let Some(etag) = etag {
                     request_builder = request_builder.header(IF_NONE_MATCH, etag);
                 }
-                
-                let response = request_builder.send()
+
+                let response = request_builder
+                    .send()
                     .with_context(|| format!("Could not GET: {}", uri))?;
 
                 match response.status() {
                     StatusCode::OK => {
                         let etag = match response.headers().get(ETAG) {
                             None => None,
-                            Some(header_value) => {
-                                Some(header_value.to_str().with_context(|| "invalid ETAG in response header")?.to_owned())
-                            }
+                            Some(header_value) => Some(
+                                header_value
+                                    .to_str()
+                                    .with_context(|| "invalid ETAG in response header")?
+                                    .to_owned(),
+                            ),
                         };
-        
-                        let bytes = response.bytes()
-                            .with_context(|| format!("Got no response from '{}' even though the status was OK", uri))?;
-                        
-                        Ok(FetchResponse::Data { bytes, etag })
-                    },
-                    StatusCode::NOT_MODIFIED => {
-                        Ok(FetchResponse::UnModified)
-                    },
-                    _ => {
-                        Err(anyhow!("Got unexpected HTTP response to GET for {}: {}", uri, response.status()))
-                    }
-                }
 
-            },
+                        let bytes = response.bytes().with_context(|| {
+                            format!(
+                                "Got no response from '{}' even though the status was OK",
+                                uri
+                            )
+                        })?;
+
+                        Ok(FetchResponse::Data { bytes, etag })
+                    }
+                    StatusCode::NOT_MODIFIED => Ok(FetchResponse::UnModified),
+                    _ => Err(anyhow!(
+                        "Got unexpected HTTP response to GET for {}: {}",
+                        uri,
+                        response.status()
+                    )),
+                }
+            }
             FetchSource::File(path) => {
                 let bytes = file_ops::read_file(path).with_context(|| {
                     format!(
@@ -94,7 +107,7 @@ impl FetchSource {
                 Ok(FetchResponse::Data { bytes, etag: None })
             }
         }?;
-        
+
         if let Some(hash) = hash {
             if let FetchResponse::Data { bytes, .. } = &fetch_response {
                 if !hash.matches(bytes.as_ref()) {
@@ -113,9 +126,10 @@ impl FetchSource {
     fn fetch_no_etag(&self, hash: Option<Hash>) -> Result<Bytes> {
         match self.fetch(hash, None)? {
             FetchResponse::Data { bytes, .. } => Ok(bytes),
-            FetchResponse::UnModified => Err(anyhow!("Got unmodified response to fetch without Etag?!")),
+            FetchResponse::UnModified => {
+                Err(anyhow!("Got unmodified response to fetch without Etag?!"))
+            }
         }
-
     }
 
     fn join(&self, rel: &str) -> Result<FetchSource> {
@@ -213,15 +227,17 @@ impl Fetcher {
         &self.notification_uri
     }
 
-    pub fn read_notification_file(&self, etag: Option<&String>) -> Result<NotificationFileResponse> {
+    pub fn read_notification_file(
+        &self,
+        etag: Option<&String>,
+    ) -> Result<NotificationFileResponse> {
         let snapshot_source = self.resolve_source(&self.notification_uri)?;
         let resp = match snapshot_source.fetch(None, etag)? {
             FetchResponse::Data { bytes, etag } => {
-                let notification =  NotificationFile::parse(bytes.as_ref())
+                let notification = NotificationFile::parse(bytes.as_ref())
                     .with_context(|| "Failed to parse notification file")?;
                 NotificationFileResponse::Data { notification, etag }
             }
-                ,
             FetchResponse::UnModified => NotificationFileResponse::Unmodified,
         };
 
@@ -272,8 +288,6 @@ impl Fetcher {
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

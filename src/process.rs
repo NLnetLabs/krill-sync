@@ -100,12 +100,11 @@ mod tests {
     #[test]
     fn build_update_clean() {
         test_with_dir("process_build_update_clean", |dir| {
-
             // Build up state for the first time
             let config_2656 = create_test_config(
                 &dir,
                 https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml"),
-                "./test-resources/rrdp-rev2656/"
+                "./test-resources/rrdp-rev2656/",
             );
             process(config_2656).unwrap();
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
@@ -117,16 +116,16 @@ mod tests {
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/current");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2656");
-            
+
             // Then update state immediately. We expect that this works AND that old
             // deprecated files and folders are kept.
             let config_2657 = create_test_config(
                 &dir,
                 https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml"),
-                "./test-resources/rrdp-rev2657/"
+                "./test-resources/rrdp-rev2657/",
             );
             process(config_2657).unwrap();
-            
+
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/snapshot.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/delta.xml");
@@ -134,11 +133,11 @@ mod tests {
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2653/delta.xml");
-            
+
             // even though the snapshot for 2656 and delta for 2652 are deprecated, they are still kept for the 'cleanup_after' period
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
-                        
+
             assert_file_dir_exists("./test/process_build_update_clean/rsync/current");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2656");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2657");
@@ -151,7 +150,7 @@ mod tests {
             let config_2658_no_delta = create_test_config(
                 &dir,
                 https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml"),
-                "./test-resources/rrdp-rev2658-no-delta/"
+                "./test-resources/rrdp-rev2658-no-delta/",
             );
             process(config_2658_no_delta).unwrap();
 
@@ -170,11 +169,13 @@ mod tests {
             // The following were deprecated in 2657 and will now be removed. The empty dir for 2652 should be removed as well.
             assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
             assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
-            assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652");
+            assert_file_dir_removed(
+                "./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652",
+            );
 
             // the rsync dir for 2656 should now be removed
             assert_file_dir_exists("./test/process_build_update_clean/rsync/current");
-            assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2658");            
+            assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2658");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2657");
             assert_file_dir_removed("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2656");
         })

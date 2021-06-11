@@ -1,9 +1,12 @@
 use std::path::Path;
-use anyhow::{Result, anyhow};
 
-use krill_sync::config::{ configure, Config };
-use krill_sync::file_ops::write_buf;
-use krill_sync::process::process;
+use anyhow::{anyhow, Result};
+
+use krill_sync::{
+    config::{configure, Config},
+    file_ops::write_buf,
+    process::process,
+};
 
 fn main() {
     if let Err(err) = configure_and_try_main() {
@@ -35,12 +38,14 @@ fn try_main(config: Config) -> Result<()> {
     process_res
 }
 
-
 pub fn lock(pid_file: &Path) -> Result<()> {
     if pid_file.is_file() {
         return Err(anyhow!("Lock file {:?} exists, aborting", &pid_file));
     }
-    write_buf(&pid_file, &format!("{}\n", std::process::id()).as_bytes().to_vec())?;
+    write_buf(
+        &pid_file,
+        &format!("{}\n", std::process::id()).as_bytes().to_vec(),
+    )?;
 
     // Ensure the lock file is removed even if we are killed by SIGINT or SIGTERM
     let unlock_pid_file = pid_file.to_owned();

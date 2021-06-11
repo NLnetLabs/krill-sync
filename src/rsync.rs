@@ -1,15 +1,19 @@
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use anyhow::{Context, Result};
 
 use rpki::uri;
 use uuid::Uuid;
 
-use crate::config::{self, Config};
-use crate::file_ops;
-use crate::rrdp::{CurrentObject, RrdpState};
-use crate::util::{self, Time};
+use crate::{
+    config::{self, Config},
+    file_ops,
+    rrdp::{CurrentObject, RrdpState},
+    util::{self, Time},
+};
 
 fn make_rsync_repo_path(uri: &uri::Rsync) -> PathBuf {
     // Drop the module as the proper module name is determined by and part of
@@ -19,7 +23,11 @@ fn make_rsync_repo_path(uri: &uri::Rsync) -> PathBuf {
     PathBuf::from_str(uri.path()).unwrap() // cannot fail (Infallible)
 }
 
-pub fn update_from_rrdp_state(rrdp_state: &RrdpState, changed: bool, config: &Config) -> Result<()> {
+pub fn update_from_rrdp_state(
+    rrdp_state: &RrdpState,
+    changed: bool,
+    config: &Config,
+) -> Result<()> {
     let mut rsync_state = RsyncDirState::recover(config)?;
 
     let new_revision = RsyncRevision {
@@ -29,16 +37,16 @@ pub fn update_from_rrdp_state(rrdp_state: &RrdpState, changed: bool, config: &Co
 
     if changed {
         write_rsync_content(&new_revision.path(config), rrdp_state.elements())?;
-    
+
         if config.rsync_dir_use_symlinks() {
             symlink_current_to_new_revision_dir(&new_revision, config)?;
         } else {
             rename_new_revision_dir_to_current(&new_revision, &rsync_state, config)?;
         }
-    
+
         rsync_state.update_current(new_revision);
     }
-    
+
     rsync_state.clean_old(config)?;
     rsync_state.persist(config)?;
 
@@ -48,14 +56,16 @@ pub fn update_from_rrdp_state(rrdp_state: &RrdpState, changed: bool, config: &Co
 /// Create a new symlink then rename it. We need to do this because the std library
 /// refuses to overwrite an existing symlink. And if we were to remove it first, then
 /// we would introduce a race condition for clients accessing.
-fn symlink_current_to_new_revision_dir(new_revision: &RsyncRevision, config: &Config) -> Result<()> {
+fn symlink_current_to_new_revision_dir(
+    new_revision: &RsyncRevision,
+    config: &Config,
+) -> Result<()> {
     info!(
         "Updating symlink 'current' to '{}' under rsync dir '{:?}'",
         new_revision.dir_name(),
         config.rsync_dir
     );
     let current_path = config.rsync_dir_current();
-
 
     let tmp_name = file_ops::path_with_extension(&current_path, config::TMP_FILE_EXT);
     if tmp_name.exists() {
@@ -90,7 +100,7 @@ fn symlink_current_to_new_revision_dir(new_revision: &RsyncRevision, config: &Co
 fn rename_new_revision_dir_to_current(
     new_revision: &RsyncRevision,
     rsync_state: &RsyncDirState,
-    config: &Config
+    config: &Config,
 ) -> Result<()> {
     info!("Renaming rsync folders for close to atomic update of the rsync module dir");
 
@@ -100,15 +110,16 @@ fn rename_new_revision_dir_to_current(
         let current_preserve_path = current.path(config);
 
         if current_path.exists() {
-            info!("Backing up rsync directory for previous revision to: {:?}", current_preserve_path);
-            std::fs::rename(&current_path, &current_preserve_path)
-                .with_context(|| 
-                    format!(
-                        "Could not rename current rsync dir from '{:?}' to '{:?}'",
-                        current_path,
-                        current_preserve_path
-                    )  
-                )?;
+            info!(
+                "Backing up rsync directory for previous revision to: {:?}",
+                current_preserve_path
+            );
+            std::fs::rename(&current_path, &current_preserve_path).with_context(|| {
+                format!(
+                    "Could not rename current rsync dir from '{:?}' to '{:?}'",
+                    current_path, current_preserve_path
+                )
+            })?;
         }
     }
 
@@ -116,14 +127,18 @@ fn rename_new_revision_dir_to_current(
     std::fs::rename(&new_revision.path(config), &current_path).with_context(|| {
         format!(
             "Could not rename new rsync dir from '{:?}' to '{:?}'",
-            new_revision.path(config), current_path
+            new_revision.path(config),
+            current_path
         )
     })?;
 
     Ok(())
 }
 
-fn write_rsync_content<'a>(out_path: &Path, elements: impl Iterator<Item=&'a CurrentObject>) -> Result<()> {
+fn write_rsync_content<'a>(
+    out_path: &Path,
+    elements: impl Iterator<Item = &'a CurrentObject>,
+) -> Result<()> {
     info!("Writing rsync repository to: {:?}", out_path);
     for element in elements {
         let path = out_path.join(make_rsync_repo_path(element.uri()));
@@ -134,12 +149,10 @@ fn write_rsync_content<'a>(out_path: &Path, elements: impl Iterator<Item=&'a Cur
     Ok(())
 }
 
-
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct RsyncDirState {
     current: Option<RsyncRevision>,
-    old: Vec<DeprecatedRsyncRevision>
+    old: Vec<DeprecatedRsyncRevision>,
 }
 
 impl RsyncDirState {
@@ -149,14 +162,21 @@ impl RsyncDirState {
         let state_path = config.rsync_state_path();
         if state_path.exists() {
             let json_bytes = file_ops::read_file(&state_path)
-            .with_context(|| format!("Cannot read rsync state file at: {:?}", state_path))?;
-            serde_json::from_slice(json_bytes.as_ref())
-            .with_context(|| {format!("Cannot deserialize json for current state from {:?}", state_path)})
+                .with_context(|| format!("Cannot read rsync state file at: {:?}", state_path))?;
+            serde_json::from_slice(json_bytes.as_ref()).with_context(|| {
+                format!(
+                    "Cannot deserialize json for current state from {:?}",
+                    state_path
+                )
+            })
         } else {
-            Ok(RsyncDirState { current: None, old: vec![]} )
+            Ok(RsyncDirState {
+                current: None,
+                old: vec![],
+            })
         }
     }
-    
+
     /// Persists the state to disk
     fn persist(&self, config: &Config) -> Result<()> {
         let state_path = config.rsync_state_path();
@@ -180,20 +200,26 @@ impl RsyncDirState {
     fn clean_old(&mut self, config: &Config) -> Result<()> {
         let clean_before = Time::seconds_ago(config.cleanup_after);
 
-        for old in self.old.iter()
-            .filter(|deprecated| deprecated.since < clean_before) {
-
-                let path = old.revision.path(config);
-                if path.exists() {
-                    info!("Removing rsync directory: {:?}, deprecated since: {}", path, old.since);
-                    // Try to remove the old directory if it still exists
-                    std::fs::remove_dir_all(&path)
-                        .with_context(|| 
-                            format!("Could not remove rsync dir for old revision at: {:?}", path))?;
-                }
+        for old in self
+            .old
+            .iter()
+            .filter(|deprecated| deprecated.since < clean_before)
+        {
+            let path = old.revision.path(config);
+            if path.exists() {
+                info!(
+                    "Removing rsync directory: {:?}, deprecated since: {}",
+                    path, old.since
+                );
+                // Try to remove the old directory if it still exists
+                std::fs::remove_dir_all(&path).with_context(|| {
+                    format!("Could not remove rsync dir for old revision at: {:?}", path)
+                })?;
+            }
         }
 
-        self.old.retain(|deprecated| deprecated.since > clean_before);
+        self.old
+            .retain(|deprecated| deprecated.since > clean_before);
 
         Ok(())
     }
@@ -217,7 +243,10 @@ impl RsyncRevision {
     }
 
     fn deprecate(self) -> DeprecatedRsyncRevision {
-        DeprecatedRsyncRevision { since: Time::now(), revision: self }
+        DeprecatedRsyncRevision {
+            since: Time::now(),
+            revision: self,
+        }
     }
 }
 
