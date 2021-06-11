@@ -300,7 +300,7 @@ mod tests {
     fn resolve_fetch_to_disk() {
         let base_path = PathBuf::from("test-resources/rrdp/");
 
-        let base_fetch = FetchSource::File(base_path.to_path_buf());
+        let base_fetch = FetchSource::File(base_path.clone());
 
         let base_uri = https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/");
         let notification_uri = base_uri.join(b"notification.xml").unwrap();
