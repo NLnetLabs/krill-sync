@@ -1,9 +1,9 @@
-//! Responsible for the main krill-sync process
-
 use anyhow::Result;
+use log::info;
 
 use crate::{config::Config, rrdp::RrdpState, rsync};
 
+/// Responsible for the main krill-sync process
 pub fn process(config: Config) -> Result<()> {
     info!("Checking: {}", config.notification_uri);
 
