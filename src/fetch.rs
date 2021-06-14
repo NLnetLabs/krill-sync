@@ -72,7 +72,7 @@ impl FetchSource {
                             Some(header_value) => Some(
                                 header_value
                                     .to_str()
-                                    .with_context(|| "invalid ETAG in response header")?
+                                    .with_context(|| "invalid ETag in response header")?
                                     .to_owned(),
                             ),
                         };
@@ -124,7 +124,7 @@ impl FetchSource {
         match self.fetch(hash, None)? {
             FetchResponse::Data { bytes, .. } => Ok(bytes),
             FetchResponse::UnModified => {
-                Err(anyhow!("Got unmodified response to fetch without Etag?!"))
+                Err(anyhow!("Got unmodified response to fetch without ETag?!"))
             }
         }
     }
