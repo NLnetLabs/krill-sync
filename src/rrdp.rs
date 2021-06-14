@@ -84,7 +84,7 @@ impl RrdpState {
         // snapshots derived from applying updates.
         let snapshot = current_objects.derive_snapshot(session_id, serial);
 
-        if !notification_file.sort_and_verify_deltas() {
+        if !notification_file.sort_and_verify_deltas(config.rrdp_max_deltas) {
             return Err(anyhow!("Notification file contained gaps in deltas"));
         }
 
@@ -184,7 +184,7 @@ impl RrdpState {
     ///   Ok(true)  if there was an update
     ///   Ok(false) if there was no update (serial and session match current)
     ///   Err       if there was an error trying to update
-    pub fn update(&mut self, fetcher: &Fetcher) -> Result<bool> {
+    pub fn update(&mut self, limit: Option<usize>, fetcher: &Fetcher) -> Result<bool> {
         match fetcher.read_notification_file(self.etag.as_ref())? {
             NotificationFileResponse::Unmodified => {
                 info!("Notification file was not changed, no updated needed.");
@@ -201,7 +201,7 @@ impl RrdpState {
                 self.etag = etag;
 
                 // Now see what we can do with the new notification file.
-                if !notification.sort_and_verify_deltas() {
+                if !notification.sort_and_verify_deltas(limit) {
                     Err(anyhow!("Notification file contained gaps in deltas"))
                 } else if notification.session_id() != self.session_id {
                     info!("Session reset by source, will apply new snapshot");
@@ -827,7 +827,7 @@ mod tests {
             let state = RrdpState::create(&config).unwrap();
 
             let mut updated = state.clone();
-            updated.update(&config.fetcher()).unwrap();
+            updated.update(config.rrdp_max_deltas, &config.fetcher()).unwrap();
 
             assert_eq!(state, updated);
         })
@@ -857,7 +857,7 @@ mod tests {
             let source_uri_base_2658 = "./test-resources/rrdp-rev2658/";
             let config_2658 = create_test_config(&dir, notification_uri, source_uri_base_2658);
 
-            recovered.update(&config_2658.fetcher()).unwrap();
+            recovered.update(config_2658.rrdp_max_deltas, &config_2658.fetcher()).unwrap();
 
             let from_clean_2657 = RrdpState::create(&config_2658).unwrap();
 
@@ -897,7 +897,7 @@ mod tests {
             let source_uri_base_2658 = "./test-resources/rrdp-rev2658-no-delta/";
             let config_2658 = create_test_config(&dir, notification_uri, source_uri_base_2658);
 
-            recovered.update(&config_2658.fetcher()).unwrap();
+            recovered.update(config_2658.rrdp_max_deltas, &config_2658.fetcher()).unwrap();
 
             let from_clean_2658 = RrdpState::create(&config_2658).unwrap();
 
@@ -938,7 +938,7 @@ mod tests {
             let config_session_reset =
                 create_test_config(&dir, notification_uri, source_uri_base_session_reset);
 
-            recovered.update(&config_session_reset.fetcher()).unwrap();
+            recovered.update(config_session_reset.rrdp_max_deltas, &config_session_reset.fetcher()).unwrap();
 
             let from_clean_session_reset = RrdpState::create(&config_session_reset).unwrap();
 
