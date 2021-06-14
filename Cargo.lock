@@ -757,6 +757,7 @@ dependencies = [
 [[package]]
 name = "rpki"
 version = "0.11.1-dev"
+source = "git+https://github.com/NLnetLabs/rpki-rs.git?branch=write-rrdp-xml#9fbaac3d770e0f8eaf8126aa5e8c2735a8b5c104"
 dependencies = [
  "base64 0.13.0",
  "bytes",
