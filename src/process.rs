@@ -15,7 +15,7 @@ pub fn process(config: Config) -> Result<()> {
     let mut changed = true;
     let mut rrdp_state = if config.state_path().exists() {
         let mut recovered = RrdpState::recover(&config.state_path())?;
-        changed = recovered.update(&config.fetcher())?;
+        changed = recovered.update(config.rrdp_max_deltas, &config.fetcher())?;
         recovered
     } else {
         RrdpState::create(&config)?
@@ -109,11 +109,11 @@ mod tests {
             process(config_2656).unwrap();
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
+
+            // note that the test config limits the number of deltas to 3
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2653/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/current");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2656");
 
@@ -131,12 +131,10 @@ mod tests {
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2653/delta.xml");
 
-            // even though the snapshot for 2656 and delta for 2652 are deprecated, they are still kept for the 'cleanup_after' period
+            // even though the snapshot for 2656 and delta for 2654 are deprecated, they are still kept for the 'cleanup_after' period
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
 
             assert_file_dir_exists("./test/process_build_update_clean/rsync/current");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2656");
@@ -163,14 +161,12 @@ mod tests {
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2653/delta.xml");
 
-            // The following were deprecated in 2657 and will now be removed. The empty dir for 2652 should be removed as well.
+            // The following were deprecated in 2657 and will now be removed. The empty dir for 2654 should be removed as well.
             assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
-            assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
+            assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
             assert_file_dir_removed(
-                "./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652",
+                "./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654",
             );
 
             // the rsync dir for 2656 should now be removed
