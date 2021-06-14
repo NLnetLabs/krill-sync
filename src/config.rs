@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use log::LevelFilter;
+use log::{info, LevelFilter};
 use structopt::clap::{crate_name, crate_version};
 use structopt::StructOpt;
 

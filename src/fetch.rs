@@ -4,9 +4,13 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use reqwest::{StatusCode, blocking::Client, header::{ETAG, IF_NONE_MATCH, USER_AGENT}};
+use reqwest::{
+    blocking::Client,
+    header::{ETAG, IF_NONE_MATCH, USER_AGENT},
+    StatusCode,
+};
 
 use rpki::{
     rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot, SnapshotInfo},
