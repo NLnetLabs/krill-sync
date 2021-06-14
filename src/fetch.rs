@@ -6,18 +6,14 @@ use std::{
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use reqwest::{
-    blocking::Client,
-    header::{ETAG, IF_NONE_MATCH},
-    StatusCode,
-};
+use reqwest::{StatusCode, blocking::Client, header::{ETAG, IF_NONE_MATCH, USER_AGENT}};
 
 use rpki::{
     rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot, SnapshotInfo},
     uri,
 };
 
-use crate::file_ops;
+use crate::{config, file_ops};
 
 //------------ FetchResponse -------------------------------------------------
 enum FetchResponse {
@@ -59,6 +55,7 @@ impl FetchSource {
         let fetch_response = match self {
             FetchSource::Uri(uri) => {
                 let mut request_builder = Client::builder().build()?.get(uri.as_str());
+                request_builder = request_builder.header(USER_AGENT, config::USER_AGENT);
 
                 if let Some(etag) = etag {
                     request_builder = request_builder.header(IF_NONE_MATCH, etag);
