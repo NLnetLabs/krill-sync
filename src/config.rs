@@ -222,13 +222,13 @@ pub fn post_configure(mut config: Config) -> Result<Config> {
         .parent()
         .ok_or_else(|| anyhow!("Notification URI should contain a path to a file"))?;
 
-    if let Some(base_fetch) = config.source_uri_base.as_ref().cloned() {
+    if let Some(base_fetch) = config.source_uri_base.as_ref() {
         if !base_fetch.is_dir() {
             return Err(anyhow!(
                 "source_uri_dir is not a readable dir or base path ending in a slash"
             ));
         } else {
-            config.fetch_map = Some(FetchMap::new(base_uri, base_fetch))
+            config.fetch_map = Some(FetchMap::new(base_uri, base_fetch.clone()))
         }
     }
 
