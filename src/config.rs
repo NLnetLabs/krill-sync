@@ -165,7 +165,7 @@ impl Config {
         Fetcher::new(self.notification_uri.clone(), self.fetch_map.clone())
     }
 
-    pub fn state_path(&self) -> PathBuf {
+    pub fn rrdp_state_path(&self) -> PathBuf {
         self.state_dir.join("rrdp-state.json")
     }
 

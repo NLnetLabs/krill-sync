@@ -13,8 +13,8 @@ pub fn process(config: Config) -> Result<()> {
     //  - create a new state based on config
     // ===================================================================
     let mut changed = true;
-    let mut rrdp_state = if config.state_path().exists() {
-        let mut recovered = RrdpState::recover(&config.state_path())?;
+    let mut rrdp_state = if config.rrdp_state_path().exists() {
+        let mut recovered = RrdpState::recover(&config.rrdp_state_path())?;
         changed = recovered.update(config.rrdp_max_deltas, &config.fetcher())?;
         recovered
     } else {
@@ -68,7 +68,7 @@ pub fn process(config: Config) -> Result<()> {
 
     // This allows future runs to pick up deltas rather than snapshots, and
     // will allow use to know which files can be safely cleaned up.
-    rrdp_state.persist(&config.state_path())?;
+    rrdp_state.persist(&config.rrdp_state_path())?;
 
     Ok(())
 }

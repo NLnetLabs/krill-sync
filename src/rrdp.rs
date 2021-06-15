@@ -842,10 +842,10 @@ mod tests {
             // Build state from source
             let state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
-            state.persist(&config.state_path()).unwrap();
+            state.persist(&config.rrdp_state_path()).unwrap();
 
             // Recover
-            let mut recovered = RrdpState::recover(&config.state_path()).unwrap();
+            let mut recovered = RrdpState::recover(&config.rrdp_state_path()).unwrap();
             assert_eq!(state, recovered);
 
             // Update
@@ -882,10 +882,10 @@ mod tests {
             // Build state from source
             let state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
-            state.persist(&config.state_path()).unwrap();
+            state.persist(&config.rrdp_state_path()).unwrap();
 
             // Recover
-            let mut recovered = RrdpState::recover(&config.state_path()).unwrap();
+            let mut recovered = RrdpState::recover(&config.rrdp_state_path()).unwrap();
             assert_eq!(state, recovered);
 
             // Update
@@ -922,10 +922,10 @@ mod tests {
             // Build state from source
             let state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
-            state.persist(&config.state_path()).unwrap();
+            state.persist(&config.rrdp_state_path()).unwrap();
 
             // Recover
-            let mut recovered = RrdpState::recover(&config.state_path()).unwrap();
+            let mut recovered = RrdpState::recover(&config.rrdp_state_path()).unwrap();
             assert_eq!(state, recovered);
 
             // Update
