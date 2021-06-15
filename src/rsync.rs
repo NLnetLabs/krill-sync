@@ -205,7 +205,7 @@ impl RsyncDirState {
         for old in self
             .old
             .iter()
-            .filter(|deprecated| deprecated.since < clean_before)
+            .filter(|deprecated| deprecated.since <= clean_before)
         {
             let path = old.revision.path(config);
             if path.exists() {
