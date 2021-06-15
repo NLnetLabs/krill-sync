@@ -381,7 +381,7 @@ impl RrdpState {
         for deprecated in self
             .deprecated_files
             .iter()
-            .filter(|d| d.since < clean_before)
+            .filter(|d| d.since <= clean_before)
         {
             let path = &deprecated.path;
             if path.exists() {
