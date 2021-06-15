@@ -67,7 +67,7 @@ pub fn process(config: Config) -> Result<()> {
     // ==============
 
     // This allows future runs to pick up deltas rather than snapshots, and
-    // will allow use to know which files can be safely cleaned up.
+    // will allow us to know which files can be safely cleaned up.
     rrdp_state.persist(&config.rrdp_state_path())?;
 
     Ok(())
