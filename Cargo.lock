@@ -757,6 +757,7 @@ dependencies = [
 [[package]]
 name = "rpki"
 version = "0.11.1-dev"
+source = "git+https://github.com/NLnetLabs/rpki-rs.git?branch=limit-notification-deltas#7aedb1651aa60484500f4bfb347582ee393dc185"
 dependencies = [
  "base64 0.13.0",
  "bytes",

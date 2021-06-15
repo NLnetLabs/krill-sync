@@ -1,14 +1,9 @@
-#[macro_use]
-extern crate log;
-
-#[macro_use]
 extern crate anyhow;
 extern crate bytes;
 extern crate chrono;
+extern crate log;
 extern crate reqwest;
 extern crate rpki;
-
-#[macro_use]
 extern crate serde;
 
 pub mod config;

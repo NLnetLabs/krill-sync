@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::usize;
 
 use anyhow::{anyhow, Result};
-use log::LevelFilter;
+use log::{info, LevelFilter};
 use structopt::clap::{crate_name, crate_version};
 use structopt::StructOpt;
 
@@ -97,6 +98,10 @@ pub struct Config {
     /// Delay seconds before writing the notification.xml file
     #[structopt(long = "rrdp-notify-delay", value_name = "seconds", default_value = DEFAULT_RRDP_NOTIFY_DELAY_SECONDS)]
     pub rrdp_notify_delay: u64,
+
+    /// Delay seconds before writing the notification.xml file
+    #[structopt(long = "rrdp-max-deltas", value_name = "number", help = "Optionally set a hard upper limit to the number of deltas included in the notification.xml.")]
+    pub rrdp_max_deltas: Option<usize>,
 
     /// The directory to write Rsync files to
     #[structopt(long = "rsync-dir", parse(from_os_str), default_value = DEFAULT_RSYNC_DIR)]
@@ -196,6 +201,7 @@ pub fn create_test_config(
         state_dir,
         rrdp_dir,
         rrdp_notify_delay: 0,
+        rrdp_max_deltas: Some(3),
         rsync_dir,
         rsync_dir_force_moves: false,
         rsync_disable: false,
