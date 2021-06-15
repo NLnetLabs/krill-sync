@@ -402,7 +402,8 @@ impl RrdpState {
     pub fn persist(&self, path: &Path) -> Result<()> {
         let json = serde_json::to_string_pretty(&self)?;
 
-        file_ops::write_buf(path, json.as_bytes()).with_context(|| "Could not save state.")
+        file_ops::write_buf(path, json.as_bytes())
+            .with_context(|| format!("Could not save state to {:?}.", path))
     }
 
     pub fn session_id(&self) -> Uuid {
@@ -432,10 +433,10 @@ impl RrdpState {
         notification.write_xml(&mut bytes)?;
 
         file_ops::write_buf(&tmp_path, &bytes)
-            .with_context(|| "Could not write temporary notification file")?;
+            .with_context(|| format!("Could not write temporary notification file to: {:?}", tmp_path))?;
 
-        fs::rename(tmp_path, final_path)
-            .with_context(|| "Could not rename tmp notification file to real notification file")?;
+        fs::rename(&tmp_path, &final_path)
+            .with_context(|| format!("Could not rename {:?} to {:?}", tmp_path, final_path))?;
 
         Ok(())
     }
@@ -495,7 +496,8 @@ impl RrdpState {
                 .snapshot
                 .xml()
                 .ok_or_else(|| anyhow!("Snapshot XML not recovered on startup"))?;
-            file_ops::write_buf(&path, xml).with_context(|| "Could not write snapshot XML")?;
+            file_ops::write_buf(&path, xml)
+                .with_context(|| format!("Could not write snapshot XML to: {:?}", path))?;
         }
 
         Ok(())
@@ -521,7 +523,8 @@ impl RrdpState {
                 let xml = delta
                     .xml()
                     .ok_or_else(|| anyhow!("Delta XML not recovered on startup"))?;
-                file_ops::write_buf(&path, xml).with_context(|| "Could not write delta XML")?;
+                file_ops::write_buf(&path, xml)
+                    .with_context(|| format!("Could not write delta XML to: {:?}", path))?;
             }
         }
 
