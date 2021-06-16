@@ -484,8 +484,7 @@ impl RrdpState {
         self.deprecated_files.push(DeprecatedFile::new(path));
     }
 
-    /// Writes a new notification file. Will not check whether the file already
-    /// exists because this is assumed to be called for new snapshot files only.
+    /// Writes a new notification file.
     fn write_snapshot(&self) -> Result<()> {
         let path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
         if path.exists() {
