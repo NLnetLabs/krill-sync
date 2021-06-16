@@ -422,7 +422,7 @@ impl RrdpState {
     /// temporary file and then rename it to avoid serving partially
     /// written files.
     pub fn write_notification(&self) -> Result<()> {
-        let tmp_path = self.rrdp_dir.join(".notification.xml");
+        let tmp_path = self.rrdp_dir.join("notification.tmp");
         let final_path = self.rrdp_dir.join("notification.xml");
 
         info!("Updating notification file at {:?}", final_path);
