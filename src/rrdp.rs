@@ -445,13 +445,14 @@ impl RrdpState {
         let base_uri = self
             .notification_uri
             .parent()
-            .ok_or_else(|| anyhow!("Notification URI does not have a parent?!"))?;
+            .ok_or_else(|| 
+                anyhow!(
+                    format!("Notification URI should point to a file in a directory. Got: {}", self.notification_uri)
+            ))?;
 
         let rel_path_snapshot = Self::rel_path_snapshot(self.session_id(), self.serial());
 
-        let snapshot_uri = base_uri
-            .join(rel_path_snapshot.as_bytes())
-            .with_context(|| "Could not derive snapshot URI")?;
+        let snapshot_uri = base_uri.join(rel_path_snapshot.as_bytes())?;
 
         let snapshot_hash = self.snapshot.hash();
         let snapshot_info = SnapshotInfo::new(snapshot_uri, snapshot_hash);
@@ -461,9 +462,7 @@ impl RrdpState {
             let serial = delta.serial();
             let hash = delta.hash();
             let rel_path_delta = Self::rel_path_delta(self.session_id(), serial);
-            let uri = base_uri
-                .join(rel_path_delta.as_bytes())
-                .with_context(|| "Could not derive delta URI")?;
+            let uri = base_uri.join(rel_path_delta.as_bytes())?;
 
             deltas.push(DeltaInfo::new(serial, uri, hash));
         }
