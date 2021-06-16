@@ -17,6 +17,7 @@ bytes = "1.0"
 ctrlc = {version = "3.1.6", features = ["termination"] }
 chrono = "0.4.18"
 fern = "0.6.0"
+fslock = "0.1.6"
 log = "0.4.11"
 reqwest = { version = "0.11.3", features = [ "blocking"] }
 rpki = { version = "0.11.1-dev", features = [ "rrdp", "serde" ], git = "https://github.com/NLnetLabs/rpki-rs.git", branch = "write-rrdp-xml" }

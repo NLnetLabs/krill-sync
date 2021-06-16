@@ -158,6 +158,10 @@ impl Config {
     pub fn rsync_state_path(&self) -> PathBuf {
         self.state_dir.join("rsync-state.json")
     }
+
+    pub fn lock_file(&self) -> PathBuf {
+        self.state_dir.join("krill-sync.lock")
+    }
 }
 
 pub fn configure() -> Result<Config> {

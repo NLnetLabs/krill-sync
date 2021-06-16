@@ -4,7 +4,7 @@ use log::info;
 use crate::{config::Config, rrdp::RrdpState, rsync};
 
 /// Responsible for the main krill-sync process
-pub fn process(config: Config) -> Result<()> {
+pub fn process(config: &Config) -> Result<()> {
     info!("Checking: {}", config.notification_uri);
 
     // ===================================================================
@@ -93,7 +93,7 @@ mod tests {
 
             let config = create_test_config(&dir, notification_uri, source_uri_base);
 
-            process(config).unwrap();
+            process(&config).unwrap();
         })
     }
 
@@ -106,7 +106,7 @@ mod tests {
                 https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml"),
                 "./test-resources/rrdp-rev2656/",
             );
-            process(config_2656).unwrap();
+            process(&config_2656).unwrap();
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
 
@@ -124,7 +124,7 @@ mod tests {
                 https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml"),
                 "./test-resources/rrdp-rev2657/",
             );
-            process(config_2657).unwrap();
+            process(&config_2657).unwrap();
 
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/snapshot.xml");
@@ -150,7 +150,7 @@ mod tests {
                 https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml"),
                 "./test-resources/rrdp-rev2658-no-delta/",
             );
-            process(config_2658_no_delta).unwrap();
+            process(&config_2658_no_delta).unwrap();
 
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2658/snapshot.xml");
@@ -201,7 +201,7 @@ mod tests {
             let mut config = create_test_config(&dir, notification_uri, source_uri_base);
             config.rsync_dir_force_moves = true;
 
-            process(config).unwrap();
+            process(&config).unwrap();
         })
     }
 }
