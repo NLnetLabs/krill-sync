@@ -9,7 +9,7 @@ use uuid::Uuid;
 //------------ Time Support --------------------------------------------------
 //----------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialOrd, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialOrd, PartialEq, Serialize)]
 pub struct Time(i64);
 
 impl Time {
@@ -33,6 +33,12 @@ impl fmt::Display for Time {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let time = Local.timestamp(self.0, 0);
         write!(f, "{}", time.to_rfc3339())
+    }
+}
+
+impl From<rpki::repository::x509::Time> for Time {
+    fn from(time: rpki::repository::x509::Time) -> Self {
+        Time(time.timestamp())
     }
 }
 
