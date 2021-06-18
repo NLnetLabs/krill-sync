@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::usize;
 
 use anyhow::{anyhow, Result};
 use log::LevelFilter;
@@ -74,64 +75,58 @@ pub struct Config {
     #[structopt(short = "q", long = "quiet", conflicts_with = "verbose")]
     pub quiet: bool,
 
-    /// Disable delta replay (RRDP content will match the upstream exactly but syncing will be slower)
-    #[structopt(long = "force-snapshot")]
-    pub force_snapshot: bool,
-
-    /// Force update even if the upstream RRDP notification file is unchanged
-    #[structopt(long = "force-update")]
-    pub force_update: bool,
-
     /// The location to write our process ID to
-    #[structopt(long = "pid-file", parse(from_os_str), default_value = DEFAULT_PID_FILE_PATH)]
+    #[structopt(long = "pid-file", value_name = "file", parse(from_os_str), default_value = DEFAULT_PID_FILE_PATH)]
     pub pid_file: PathBuf,
 
     /// The directory to write state to
-    #[structopt(long = "state-dir", short = "s", parse(from_os_str), default_value = DEFAULT_STATE_DIR)]
+    #[structopt(long = "state-dir", value_name = "dir", short = "s", parse(from_os_str), default_value = DEFAULT_STATE_DIR)]
     pub state_dir: PathBuf,
 
     /// The directory to write RRDP files to
-    #[structopt(long = "rrdp-dir", parse(from_os_str), default_value = DEFAULT_RRDP_DIR)]
+    #[structopt(long = "rrdp-dir", value_name = "dir", parse(from_os_str), default_value = DEFAULT_RRDP_DIR)]
     pub rrdp_dir: PathBuf,
 
     /// Delay seconds before writing the notification.xml file
     #[structopt(long = "rrdp-notify-delay", value_name = "seconds", default_value = DEFAULT_RRDP_NOTIFY_DELAY_SECONDS)]
     pub rrdp_notify_delay: u64,
 
+    /// Optional hard upper limit to the number of deltas
+    #[structopt(long = "rrdp-max-deltas", value_name = "number")]
+    pub rrdp_max_deltas: Option<usize>,
+
     /// The directory to write Rsync files to
-    #[structopt(long = "rsync-dir", parse(from_os_str), default_value = DEFAULT_RSYNC_DIR)]
+    #[structopt(long = "rsync-dir", value_name = "dir", parse(from_os_str), default_value = DEFAULT_RSYNC_DIR)]
     pub rsync_dir: PathBuf,
 
-    /// Force using directory moves rather than symlinks on unix systems. Mainly added to help
-    /// test the alternative code path.
-    #[structopt(long = "rsync-dir-force-moves")]
+    /// Force using directory moves rather than symlinks on unix systems. Added for unit testing this
+    /// code path, not for giving this bad idea to users! So skip it for structopt.
+    #[structopt(skip)]
     pub rsync_dir_force_moves: bool,
 
     /// Disable writing the rsync files.
     #[structopt(long = "rsync-disable")]
     pub rsync_disable: bool,
 
-    /// The minimum number of seconds that a dangling snapshot or delta must have been published by krill-sync before it can be removed
+    /// Support different rsync base URIs, include host and module: <rsync_dir>/current/<host>/<module>/..
+     #[structopt(long = "full-rsync-path")]
+     pub rsync_multiple_auth: bool,
+
+    /// Remove unreferenced files and directories older than X seconds
     #[structopt(long = "cleanup-after", value_name = "seconds", default_value = DEFAULT_CLEANUP_SECONDS)]
     pub cleanup_after: i64,
 
-    /// Whether or not localhost connections and self-signed certificates are
-    /// allowed.
+    /// Whether or not localhost connections and self-signed certificates are allowed
     #[structopt(long = "insecure")]
     pub insecure: bool,
 
-    /// The RRDP notification file URI of the Krill instance to sync with
+    /// The public RRDP notification URI
     pub notification_uri: Https,
 
-    /// An optional mapping of the notification file URI path up to the parent directory of
-    /// the notification file itself, to a different base URI / path on disk.
-    ///
-    /// Note: For Krill and RIPE NCC - snapshots and deltas can always be found in subdirectories
-    ///        **under** the base dir of the notification file. However, we may want to revisit this
-    ///        configuration in future to allow for explicit mapping of multiple URI paths.
+    /// Base uri for the notify file on the back-end server. Must end with a slash.
     #[structopt(
         long = "source_uri_base",
-        value_name = "alternate fetch base uri or dir for notification uri"
+        value_name = "uri"
     )]
     pub source_uri_base: Option<FetchSource>,
 
@@ -160,7 +155,7 @@ impl Config {
         Fetcher::new(self.notification_uri.clone(), self.fetch_map.clone())
     }
 
-    pub fn state_path(&self) -> PathBuf {
+    pub fn rrdp_state_path(&self) -> PathBuf {
         self.state_dir.join("rrdp-state.json")
     }
 
@@ -190,15 +185,15 @@ pub fn create_test_config(
     let config = Config {
         verbose: 0,
         quiet: false,
-        force_snapshot: false,
-        force_update: false,
         pid_file,
         state_dir,
         rrdp_dir,
         rrdp_notify_delay: 0,
+        rrdp_max_deltas: Some(3),
         rsync_dir,
         rsync_dir_force_moves: false,
         rsync_disable: false,
+        rsync_multiple_auth: false,
         cleanup_after: 2,
         insecure: false,
         notification_uri,
@@ -216,13 +211,13 @@ pub fn post_configure(mut config: Config) -> Result<Config> {
         .parent()
         .ok_or_else(|| anyhow!("Notification URI should contain a path to a file"))?;
 
-    if let Some(base_fetch) = config.source_uri_base.as_ref().cloned() {
+    if let Some(base_fetch) = config.source_uri_base.as_ref() {
         if !base_fetch.is_dir() {
             return Err(anyhow!(
                 "source_uri_dir is not a readable dir or base path ending in a slash"
             ));
         } else {
-            config.fetch_map = Some(FetchMap::new(base_uri, base_fetch))
+            config.fetch_map = Some(FetchMap::new(base_uri, base_fetch.clone()))
         }
     }
 
@@ -244,13 +239,6 @@ pub fn post_configure(mut config: Config) -> Result<Config> {
                 .rsync_dir
                 .replace(DEFAULT_STATE_DIR, &config.state_dir);
         }
-    }
-
-    if config.force_snapshot {
-        info!("Note: --force-snapshot=true: Snapshot download has been forced. RRDP deltas will not be used to accelerate snapshot syncing.")
-    }
-    if config.force_update {
-        info!("Note: --force-update=true: Update will be forced even if upstream RRDP content is unchanged.")
     }
 
     Ok(config)

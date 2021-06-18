@@ -4,8 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use log::{debug, info};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use rpki::{
@@ -82,7 +84,7 @@ impl RrdpState {
         // snapshots derived from applying updates.
         let snapshot = current_objects.derive_snapshot(session_id, serial);
 
-        if !notification_file.sort_and_verify_deltas() {
+        if !notification_file.sort_and_verify_deltas(config.rrdp_max_deltas) {
             return Err(anyhow!("Notification file contained gaps in deltas"));
         }
 
@@ -127,12 +129,13 @@ impl RrdpState {
         Ok(recovered)
     }
 
-        /// Try to update this state using the notification file found in the specified fetcher.
+    /// Try to update this state using the notification file found in the specified fetcher.
+    ///
     /// Returns:
     ///   Ok(true)  if there was an update
     ///   Ok(false) if there was no update (serial and session match current)
     ///   Err       if there was an error trying to update
-    pub fn update(&mut self, fetcher: &Fetcher) -> Result<bool> {
+    pub fn update(&mut self, limit: Option<usize>, fetcher: &Fetcher) -> Result<bool> {
         match fetcher.read_notification_file(self.etag.as_ref())? {
             NotificationFileResponse::Unmodified => {
                 info!("Notification file was not changed, no updated needed.");
@@ -149,7 +152,7 @@ impl RrdpState {
                 self.etag = etag;
 
                 // Now see what we can do with the new notification file.
-                if !notification.sort_and_verify_deltas() {
+                if !notification.sort_and_verify_deltas(limit) {
                     Err(anyhow!("Notification file contained gaps in deltas"))
                 } else if notification.session_id() != self.session_id {
                     info!("Session reset by source, will apply new snapshot");
@@ -329,7 +332,7 @@ impl RrdpState {
         for deprecated in self
             .deprecated_files
             .iter()
-            .filter(|d| d.since < clean_before)
+            .filter(|d| d.since <= clean_before)
         {
             let path = &deprecated.path;
             if path.exists() {
@@ -350,7 +353,8 @@ impl RrdpState {
     pub fn persist(&self, path: &Path) -> Result<()> {
         let json = serde_json::to_string_pretty(&self)?;
 
-        file_ops::write_buf(path, json.as_bytes()).with_context(|| "Could not save state.")
+        file_ops::write_buf(path, json.as_bytes())
+            .with_context(|| format!("Could not save state to {:?}.", path))
     }
 
     pub fn session_id(&self) -> Uuid {
@@ -369,7 +373,7 @@ impl RrdpState {
     /// temporary file and then rename it to avoid serving partially
     /// written files.
     pub fn write_notification(&self) -> Result<()> {
-        let tmp_path = self.rrdp_dir.join(".notification.xml");
+        let tmp_path = self.rrdp_dir.join("notification.tmp");
         let final_path = self.rrdp_dir.join("notification.xml");
 
         info!("Updating notification file at {:?}", final_path);
@@ -380,10 +384,10 @@ impl RrdpState {
         notification.write_xml(&mut bytes)?;
 
         file_ops::write_buf(&tmp_path, &bytes)
-            .with_context(|| "Could not write temporary notification file")?;
+            .with_context(|| format!("Could not write temporary notification file to: {:?}", tmp_path))?;
 
-        fs::rename(tmp_path, final_path)
-            .with_context(|| "Could not rename tmp notification file to real notification file")?;
+        fs::rename(&tmp_path, &final_path)
+            .with_context(|| format!("Could not rename {:?} to {:?}", tmp_path, final_path))?;
 
         Ok(())
     }
@@ -392,13 +396,14 @@ impl RrdpState {
         let base_uri = self
             .notification_uri
             .parent()
-            .ok_or_else(|| anyhow!("Notification URI does not have a parent?!"))?;
+            .ok_or_else(|| 
+                anyhow!(
+                    format!("Notification URI should point to a file in a directory. Got: {}", self.notification_uri)
+            ))?;
 
         let rel_path_snapshot = Self::rel_path_snapshot(self.session_id(), self.serial());
 
-        let snapshot_uri = base_uri
-            .join(rel_path_snapshot.as_bytes())
-            .with_context(|| "Could not derive snapshot URI")?;
+        let snapshot_uri = base_uri.join(rel_path_snapshot.as_bytes())?;
 
         let snapshot_hash = self.snapshot.hash();
         let snapshot_info = SnapshotInfo::new(snapshot_uri, snapshot_hash);
@@ -408,9 +413,7 @@ impl RrdpState {
             let serial = delta.serial();
             let hash = delta.hash();
             let rel_path_delta = Self::rel_path_delta(self.session_id(), serial);
-            let uri = base_uri
-                .join(rel_path_delta.as_bytes())
-                .with_context(|| "Could not derive delta URI")?;
+            let uri = base_uri.join(rel_path_delta.as_bytes())?;
 
             deltas.push(DeltaInfo::new(serial, uri, hash));
         }
@@ -812,7 +815,7 @@ mod tests {
             let state = RrdpState::create(&config).unwrap();
 
             let mut updated = state.clone();
-            updated.update(&config.fetcher()).unwrap();
+            updated.update(config.rrdp_max_deltas, &config.fetcher()).unwrap();
 
             assert_eq!(state, updated);
         })
@@ -830,10 +833,10 @@ mod tests {
             // Build state from source
             let mut state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
-            state.persist(&config.state_path()).unwrap();
+            state.persist(&config.rrdp_state_path()).unwrap();
 
             // Recover
-            let mut recovered = RrdpState::recover(&config.state_path()).unwrap();
+            let mut recovered = RrdpState::recover(&config.rrdp_state_path()).unwrap();
             assert_eq!(state, recovered);
 
             // Update
@@ -842,7 +845,7 @@ mod tests {
             let source_uri_base_2658 = "./test-resources/rrdp-rev2658/";
             let config_2658 = create_test_config(&dir, notification_uri, source_uri_base_2658);
 
-            recovered.update(&config_2658.fetcher()).unwrap();
+            recovered.update(config_2658.rrdp_max_deltas, &config_2658.fetcher()).unwrap();
 
             let from_clean_2657 = RrdpState::create(&config_2658).unwrap();
 
@@ -870,10 +873,10 @@ mod tests {
             // Build state from source
             let mut state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
-            state.persist(&config.state_path()).unwrap();
+            state.persist(&config.rrdp_state_path()).unwrap();
 
             // Recover
-            let mut recovered = RrdpState::recover(&config.state_path()).unwrap();
+            let mut recovered = RrdpState::recover(&config.rrdp_state_path()).unwrap();
             assert_eq!(state, recovered);
 
             // Update
@@ -882,7 +885,7 @@ mod tests {
             let source_uri_base_2658 = "./test-resources/rrdp-rev2658-no-delta/";
             let config_2658 = create_test_config(&dir, notification_uri, source_uri_base_2658);
 
-            recovered.update(&config_2658.fetcher()).unwrap();
+            recovered.update(config_2658.rrdp_max_deltas, &config_2658.fetcher()).unwrap();
 
             let from_clean_2658 = RrdpState::create(&config_2658).unwrap();
 
@@ -910,10 +913,10 @@ mod tests {
             // Build state from source
             let mut state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
-            state.persist(&config.state_path()).unwrap();
+            state.persist(&config.rrdp_state_path()).unwrap();
 
             // Recover
-            let mut recovered = RrdpState::recover(&config.state_path()).unwrap();
+            let mut recovered = RrdpState::recover(&config.rrdp_state_path()).unwrap();
             assert_eq!(state, recovered);
 
             // Update
@@ -923,7 +926,7 @@ mod tests {
             let config_session_reset =
                 create_test_config(&dir, notification_uri, source_uri_base_session_reset);
 
-            recovered.update(&config_session_reset.fetcher()).unwrap();
+            recovered.update(config_session_reset.rrdp_max_deltas, &config_session_reset.fetcher()).unwrap();
 
             let from_clean_session_reset = RrdpState::create(&config_session_reset).unwrap();
 

@@ -4,11 +4,11 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use reqwest::{
     blocking::Client,
-    header::{ETAG, IF_NONE_MATCH},
+    header::{ETAG, IF_NONE_MATCH, USER_AGENT},
     StatusCode,
 };
 
@@ -17,7 +17,7 @@ use rpki::{
     uri,
 };
 
-use crate::file_ops;
+use crate::{config, file_ops};
 
 //------------ FetchResponse -------------------------------------------------
 enum FetchResponse {
@@ -59,6 +59,7 @@ impl FetchSource {
         let fetch_response = match self {
             FetchSource::Uri(uri) => {
                 let mut request_builder = Client::builder().build()?.get(uri.as_str());
+                request_builder = request_builder.header(USER_AGENT, config::USER_AGENT);
 
                 if let Some(etag) = etag {
                     request_builder = request_builder.header(IF_NONE_MATCH, etag);
@@ -75,7 +76,7 @@ impl FetchSource {
                             Some(header_value) => Some(
                                 header_value
                                     .to_str()
-                                    .with_context(|| "invalid ETAG in response header")?
+                                    .with_context(|| "invalid ETag in response header")?
                                     .to_owned(),
                             ),
                         };
@@ -127,7 +128,7 @@ impl FetchSource {
         match self.fetch(hash, None)? {
             FetchResponse::Data { bytes, .. } => Ok(bytes),
             FetchResponse::UnModified => {
-                Err(anyhow!("Got unmodified response to fetch without Etag?!"))
+                Err(anyhow!("Got unmodified response to fetch without ETag?!"))
             }
         }
     }

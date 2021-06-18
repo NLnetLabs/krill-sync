@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use log::trace;
 
 pub fn write_buf(file_path: &Path, buf: &[u8]) -> Result<()> {
     let dir = file_path

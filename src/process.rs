@@ -1,9 +1,9 @@
-//! Responsible for the main krill-sync process
-
 use anyhow::Result;
+use log::info;
 
 use crate::{config::Config, rrdp::RrdpState, rsync};
 
+/// Responsible for the main krill-sync process
 pub fn process(config: Config) -> Result<()> {
     info!("Checking: {}", config.notification_uri);
 
@@ -13,9 +13,9 @@ pub fn process(config: Config) -> Result<()> {
     //  - create a new state based on config
     // ===================================================================
     let mut changed = true;
-    let mut rrdp_state = if config.state_path().exists() {
-        let mut recovered = RrdpState::recover(&config.state_path())?;
-        changed = recovered.update(&config.fetcher())?;
+    let mut rrdp_state = if config.rrdp_state_path().exists() {
+        let mut recovered = RrdpState::recover(&config.rrdp_state_path())?;
+        changed = recovered.update(config.rrdp_max_deltas, &config.fetcher())?;
         recovered
     } else {
         RrdpState::create(&config)?
@@ -67,8 +67,8 @@ pub fn process(config: Config) -> Result<()> {
     // ==============
 
     // This allows future runs to pick up deltas rather than snapshots, and
-    // will allow use to know which files can be safely cleaned up.
-    rrdp_state.persist(&config.state_path())?;
+    // will allow us to know which files can be safely cleaned up.
+    rrdp_state.persist(&config.rrdp_state_path())?;
 
     Ok(())
 }
@@ -109,11 +109,11 @@ mod tests {
             process(config_2656).unwrap();
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
+
+            // note that the test config limits the number of deltas to 3
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2653/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/current");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2656");
 
@@ -131,12 +131,10 @@ mod tests {
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2653/delta.xml");
 
-            // even though the snapshot for 2656 and delta for 2652 are deprecated, they are still kept for the 'cleanup_after' period
+            // even though the snapshot for 2656 and delta for 2654 are deprecated, they are still kept for the 'cleanup_after' period
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
 
             assert_file_dir_exists("./test/process_build_update_clean/rsync/current");
             assert_file_dir_exists("./test/process_build_update_clean/rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2656");
@@ -163,14 +161,12 @@ mod tests {
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2653/delta.xml");
 
-            // The following were deprecated in 2657 and will now be removed. The empty dir for 2652 should be removed as well.
+            // The following were deprecated in 2657 and will now be removed. The empty dir for 2654 should be removed as well.
             assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
-            assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652/delta.xml");
+            assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
             assert_file_dir_removed(
-                "./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2652",
+                "./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654",
             );
 
             // the rsync dir for 2656 should now be removed
@@ -206,6 +202,20 @@ mod tests {
             config.rsync_dir_force_moves = true;
 
             process(config).unwrap();
+        })
+    }
+
+    #[test]
+    fn build_from_clean_state_with_multiple_rsync() {
+        test_with_dir("build_from_clean_state_with_multiple_rsync", |dir| {
+            let notification_uri =
+                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+            let source_uri_base = "./test-resources/rrdp-rev2656/";
+
+            let mut config = create_test_config(&dir, notification_uri, source_uri_base);
+            config.rsync_multiple_auth = true;
+
+            process(config).unwrap(); // basically test that it does not blow up, manually inspected the structure.
         })
     }
 }
