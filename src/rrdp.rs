@@ -674,7 +674,7 @@ impl CurrentObject {
         };
 
         if let Err(e) = object.fix_since() {
-            warn!("Could not guess creation time for object at uri: {}. Error: {}", object.uri(), e);
+            warn!("Could not derive creation time for object at uri: {}. Error: {}", object.uri(), e);
         }
 
         object
@@ -708,12 +708,12 @@ impl CurrentObject {
             self.since = mft.this_update().into();
         } else if uri_path.ends_with(".crl") {
             let crl = Crl::decode(self.data.as_ref())
-                .map_err(|_| anyhow!("Cannot parse crl"))?;
+                .map_err(|_| anyhow!("Cannot parse CRL"))?;
             
             self.since = crl.this_update().into();
         } else if uri_path.ends_with(".roa") {
             let roa = Roa::decode(self.data.as_ref(), false)
-                .map_err(|_| anyhow!("Cannot parse manifest"))?;
+                .map_err(|_| anyhow!("Cannot parse ROA"))?;
             
             self.since = roa.cert().validity().not_before().into();
         } else {
