@@ -123,7 +123,7 @@ pub struct Config {
     /// The public RRDP notification URI
     pub notification_uri: Https,
 
-    /// Base uri for the notify file on the back-end server. Must end with a slash.
+    /// Slash terminated base uri for the notify file source
     #[structopt(
         long = "source_uri_base",
         value_name = "uri"
