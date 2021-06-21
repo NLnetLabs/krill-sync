@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use fslock::LockFile;
 use krill_sync::{
@@ -43,10 +43,14 @@ fn lock(config: &Config) -> Result<LockFile> {
     let lock_file_path = config.lock_file();
     let mut lock_file = LockFile::open(&lock_file_path)
         .with_context(|| format!("Cannot open lockfile: {:?}", lock_file_path))?;
-    lock_file.lock()
-        .with_context(|| format!("Cannot lock using lockfile: {:?}", lock_file_path))?;
     
-    Ok(lock_file)
+    if !lock_file.try_lock()
+        .with_context(|| format!("Cannot lock using lockfile: {:?}", lock_file_path))?
+    {
+        Err(anyhow!(format!("another krill-sync process holds the lock at {:?}", lock_file_path)))
+    } else {
+        Ok(lock_file)
+    }
 }
 
 fn write_pid_file(pid_file: &Path) -> Result<()> {
