@@ -10,7 +10,7 @@ use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use rpki::{repository::{Crl, Manifest, Roa, cert::Cert}, rrdp::{
+use rpki::{repository::{Crl, Manifest, Roa, cert::Cert, sigobj::SignedObject}, rrdp::{
         self, Delta, DeltaElement, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot,
         SnapshotInfo, UpdateElement, WithdrawElement,
     }, uri::{Https, Rsync}};
@@ -717,7 +717,12 @@ impl CurrentObject {
             
             self.since = roa.cert().validity().not_before().into();
         } else {
-            return Err(anyhow!(format!("Cannot parse object type to derive mtime for object with uri: {}", self.uri())))
+            // Try to parse this as a generic RPKI signed object
+            if let Ok(sig_obj) = SignedObject::decode(self.data.as_ref(), false) {
+                self.since = sig_obj.cert().validity().not_before().into();
+            } else {
+                return Err(anyhow!(format!("Cannot parse object type to derive mtime for object with uri: {}", self.uri())))
+            }
         }
 
         Ok(())
