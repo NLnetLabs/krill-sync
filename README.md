@@ -35,6 +35,43 @@ You can then install krill-sync by running
 sudo apt install krill-sync
 ```
 
+# Install using Docker
+
+_**Note:** At the time of writing the krill-sync image has not been published to Docker Hub yet and so you will need to build the image yourself with the `docker build -t nlnetlabs/krill-sync:v0.2.0-local-build .` command in a clone of this repository (don't forget the trailing `.`!)_
+
+**Simple usage: Persisting state within the container**
+
+```bash
+# FIRST RUN
+docker run --name ks nlnetlabs/krill-sync:v0.2.0-rc1 -v https://<your.fqdn>/notification.xml
+INFO: Checking: https://<your.fqdn>/notification.xml
+INFO: No prior state found, will build up state from latest snapshot at source
+..
+
+# SUBSEQUENT RUNS
+docker start -a ks
+INFO: Checking: https://<your.fqdn>/notification.xml
+INFO: Recovered prior state => session: c85a5e87-ad1a-4b5a-b73f-8325877826fd, serial: 446
+..
+```
+
+_**Note:** If you delete the `ks` container you will also delete the krill-sync state stored within it. See below for alternative approaches to managing persistent state._
+
+**Advanced usage: Using a named Docker volume to persist state outside the container**
+
+```bash
+# FIRST AND SUBSEQUENT RUNS
+docker run --rm -v ksvol:/data nlnetlabs/krill-sync:v0.2.0-rc1 -v https://<your.fqdn>/notification.xml
+```
+
+**Advanced usage: Using a host directory to persist state outside the container**
+
+```bash
+# FIRST AND SUBSEQUENT RUNS
+docker run --rm -v /some/host/dir:/data nlnetlabs/krill-sync:v0.2.0-rc1 -v https://<your.fqdn>/notification.xml
+```
+
+_**Note:** For host directory binding to work you MUST pre-create the `/some/host/dir` directory on the host and `sudo chown 1012 /some/host/dir` it so that the UID that krill-sync runs as has permission to write to the host directory._
 
 ### Build with Cargo
 
