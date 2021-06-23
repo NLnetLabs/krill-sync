@@ -10,10 +10,14 @@ use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use rpki::{repository::{Crl, Manifest, Roa, cert::Cert, sigobj::SignedObject}, rrdp::{
+use rpki::{
+    repository::{cert::Cert, sigobj::SignedObject, Crl, Manifest, Roa},
+    rrdp::{
         self, Delta, DeltaElement, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot,
         SnapshotInfo, UpdateElement, WithdrawElement,
-    }, uri::{Https, Rsync}};
+    },
+    uri::{Https, Rsync},
+};
 
 use crate::{
     config::Config,
@@ -380,8 +384,12 @@ impl RrdpState {
         let mut bytes: Vec<u8> = vec![];
         notification.write_xml(&mut bytes)?;
 
-        file_ops::write_buf(&tmp_path, &bytes)
-            .with_context(|| format!("Could not write temporary notification file to: {:?}", tmp_path))?;
+        file_ops::write_buf(&tmp_path, &bytes).with_context(|| {
+            format!(
+                "Could not write temporary notification file to: {:?}",
+                tmp_path
+            )
+        })?;
 
         fs::rename(&tmp_path, &final_path)
             .with_context(|| format!("Could not rename {:?} to {:?}", tmp_path, final_path))?;
@@ -390,13 +398,12 @@ impl RrdpState {
     }
 
     fn make_notification_file(&self) -> Result<NotificationFile> {
-        let base_uri = self
-            .notification_uri
-            .parent()
-            .ok_or_else(|| 
-                anyhow!(
-                    format!("Notification URI should point to a file in a directory. Got: {}", self.notification_uri)
-            ))?;
+        let base_uri = self.notification_uri.parent().ok_or_else(|| {
+            anyhow!(format!(
+                "Notification URI should point to a file in a directory. Got: {}",
+                self.notification_uri
+            ))
+        })?;
 
         let rel_path_snapshot = Self::rel_path_snapshot(self.session_id(), self.serial());
 
@@ -468,7 +475,8 @@ impl RrdpState {
                 let xml = delta
                     .take_xml()
                     .ok_or_else(|| anyhow!("Delta XML no longer in memory, do not delete files! Restart from clean state!"))?;
-                file_ops::write_buf(&path, &xml).with_context(|| format!("Could not write delta XML to {:?}", path))?;
+                file_ops::write_buf(&path, &xml)
+                    .with_context(|| format!("Could not write delta XML to {:?}", path))?;
             }
         }
 
@@ -613,7 +621,7 @@ impl From<Vec<PublishElement>> for CurrentObjectMap {
 }
 
 mod serde_current_object_map {
-    
+
     use super::*;
 
     use serde::de::{Deserialize, Deserializer};
@@ -635,9 +643,7 @@ mod serde_current_object_map {
     where
         S: Serializer,
     {
-        serializer.collect_seq(
-            map.0.iter().map(|(hash, object)| ItemRef {  hash, object })
-        )
+        serializer.collect_seq(map.0.iter().map(|(hash, object)| ItemRef { hash, object }))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<CurrentObjectMap, D::Error>
@@ -650,7 +656,6 @@ mod serde_current_object_map {
         }
         Ok(CurrentObjectMap(map))
     }
-
 }
 
 //------------ CurrentObject -------------------------------------------------
@@ -659,30 +664,36 @@ mod serde_current_object_map {
 pub struct CurrentObject {
     uri: Rsync,
 
-    #[serde(deserialize_with = "util::de_bytes", serialize_with = "util::ser_bytes")]
+    #[serde(
+        deserialize_with = "util::de_bytes",
+        serialize_with = "util::ser_bytes"
+    )]
     data: Bytes,
     since: Time,
 }
 
 impl CurrentObject {
-    pub fn new(
-        uri: Rsync,
-        data: Bytes,
-    ) -> Self {
-        let mut object =  CurrentObject {
-            uri, data, since: Time::now()
+    pub fn new(uri: Rsync, data: Bytes) -> Self {
+        let mut object = CurrentObject {
+            uri,
+            data,
+            since: Time::now(),
         };
 
         // Try to set the 'since' Time for this file so that the file mtime can be updated
         // to reflect it. This is done because otherwise rsync clients may be decide that
         // a file was changed based on the mtime and will try to retrieve it. See issue #25
         if let Err(e) = object.fix_since() {
-            warn!("Could not derive creation time for object at uri: {}. Error: {}", object.uri(), e);
+            warn!(
+                "Could not derive creation time for object at uri: {}. Error: {}",
+                object.uri(),
+                e
+            );
         }
 
         object
     }
-    
+
     pub fn uri(&self) -> &Rsync {
         &self.uri
     }
@@ -698,33 +709,35 @@ impl CurrentObject {
     /// Fixes the since time based on the actual parsed object.
     /// Returns an error if the object cannot be parsed.
     fn fix_since(&mut self) -> Result<()> {
-        let uri_path= self.uri.path();
+        let uri_path = self.uri.path();
         if uri_path.ends_with(".cer") {
             let cer = Cert::decode(self.data.as_ref())
                 .map_err(|_| anyhow!("Cannot parse certificate"))?;
-            
+
             self.since = cer.validity().not_before().into();
         } else if uri_path.ends_with(".mft") {
             let mft = Manifest::decode(self.data.as_ref(), false)
                 .map_err(|_| anyhow!("Cannot parse manifest"))?;
-            
+
             self.since = mft.this_update().into();
         } else if uri_path.ends_with(".crl") {
-            let crl = Crl::decode(self.data.as_ref())
-                .map_err(|_| anyhow!("Cannot parse CRL"))?;
-            
+            let crl = Crl::decode(self.data.as_ref()).map_err(|_| anyhow!("Cannot parse CRL"))?;
+
             self.since = crl.this_update().into();
         } else if uri_path.ends_with(".roa") {
-            let roa = Roa::decode(self.data.as_ref(), false)
-                .map_err(|_| anyhow!("Cannot parse ROA"))?;
-            
+            let roa =
+                Roa::decode(self.data.as_ref(), false).map_err(|_| anyhow!("Cannot parse ROA"))?;
+
             self.since = roa.cert().validity().not_before().into();
         } else {
             // Try to parse this as a generic RPKI signed object
             if let Ok(sig_obj) = SignedObject::decode(self.data.as_ref(), false) {
                 self.since = sig_obj.cert().validity().not_before().into();
             } else {
-                return Err(anyhow!(format!("Cannot parse object type to derive mtime for object with uri: {}", self.uri())))
+                return Err(anyhow!(format!(
+                    "Cannot parse object type to derive mtime for object with uri: {}",
+                    self.uri()
+                )));
             }
         }
 
@@ -848,12 +861,19 @@ mod tests {
 
     #[test]
     fn time_stamp_from_objects() {
-        let snapshot_xml = include_bytes!("../test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/snapshot.xml");
+        let snapshot_xml = include_bytes!(
+            "../test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/snapshot.xml"
+        );
         let snapshot = Snapshot::parse(snapshot_xml.as_ref()).unwrap();
 
         fn find_current_object(snapshot: &Snapshot, ext: &str) -> CurrentObject {
-            let (uri, data) = snapshot.elements().iter()
-                .find(|e| e.uri().ends_with(ext)).unwrap().clone().unpack();
+            let (uri, data) = snapshot
+                .elements()
+                .iter()
+                .find(|e| e.uri().ends_with(ext))
+                .unwrap()
+                .clone()
+                .unpack();
             CurrentObject::new(uri, data)
         }
 
@@ -880,7 +900,9 @@ mod tests {
             let state = RrdpState::create(&config).unwrap();
 
             let mut updated = state.clone();
-            updated.update(config.rrdp_max_deltas, &config.fetcher()).unwrap();
+            updated
+                .update(config.rrdp_max_deltas, &config.fetcher())
+                .unwrap();
 
             assert_eq!(state, updated);
         })
@@ -910,7 +932,9 @@ mod tests {
             let source_uri_base_2658 = "./test-resources/rrdp-rev2658/";
             let config_2658 = create_test_config(&dir, notification_uri, source_uri_base_2658);
 
-            recovered.update(config_2658.rrdp_max_deltas, &config_2658.fetcher()).unwrap();
+            recovered
+                .update(config_2658.rrdp_max_deltas, &config_2658.fetcher())
+                .unwrap();
 
             let from_clean_2657 = RrdpState::create(&config_2658).unwrap();
 
@@ -950,7 +974,9 @@ mod tests {
             let source_uri_base_2658 = "./test-resources/rrdp-rev2658-no-delta/";
             let config_2658 = create_test_config(&dir, notification_uri, source_uri_base_2658);
 
-            recovered.update(config_2658.rrdp_max_deltas, &config_2658.fetcher()).unwrap();
+            recovered
+                .update(config_2658.rrdp_max_deltas, &config_2658.fetcher())
+                .unwrap();
 
             let from_clean_2658 = RrdpState::create(&config_2658).unwrap();
 
@@ -991,7 +1017,12 @@ mod tests {
             let config_session_reset =
                 create_test_config(&dir, notification_uri, source_uri_base_session_reset);
 
-            recovered.update(config_session_reset.rrdp_max_deltas, &config_session_reset.fetcher()).unwrap();
+            recovered
+                .update(
+                    config_session_reset.rrdp_max_deltas,
+                    &config_session_reset.fetcher(),
+                )
+                .unwrap();
 
             let from_clean_session_reset = RrdpState::create(&config_session_reset).unwrap();
 

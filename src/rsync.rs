@@ -1,10 +1,8 @@
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use filetime::{FileTime, set_file_mtime};
+use filetime::{set_file_mtime, FileTime};
 use log::{info, trace};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -29,7 +27,11 @@ pub fn update_from_rrdp_state(
     };
 
     if changed {
-        write_rsync_content(&new_revision.path(config), config.rsync_multiple_auth, rrdp_state.elements())?;
+        write_rsync_content(
+            &new_revision.path(config),
+            config.rsync_multiple_auth,
+            rrdp_state.elements(),
+        )?;
 
         if config.rsync_dir_use_symlinks() {
             symlink_current_to_new_revision_dir(&new_revision, config)?;
@@ -137,7 +139,12 @@ fn write_rsync_content<'a>(
     for element in elements {
         let path = if include_host_and_module {
             let uri = element.uri();
-            out_path.join(format!("{}/{}/{}", uri.authority(), uri.module_name(), uri.path()))
+            out_path.join(format!(
+                "{}/{}/{}",
+                uri.authority(),
+                uri.module_name(),
+                uri.path()
+            ))
         } else {
             out_path.join(element.uri().path())
         };

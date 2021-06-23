@@ -105,8 +105,8 @@ pub struct Config {
     pub rsync_disable: bool,
 
     /// Support different rsync base URIs, include host and module: <rsync_dir>/current/<host>/<module>/..
-     #[structopt(long = "full-rsync-path")]
-     pub rsync_multiple_auth: bool,
+    #[structopt(long = "full-rsync-path")]
+    pub rsync_multiple_auth: bool,
 
     /// Remove unreferenced files and directories older than X seconds
     #[structopt(long = "cleanup-after", value_name = "seconds", default_value = DEFAULT_CLEANUP_SECONDS)]
@@ -120,10 +120,7 @@ pub struct Config {
     pub notification_uri: Https,
 
     /// Slash terminated base uri for the notify file source
-    #[structopt(
-        long = "source_uri_base",
-        value_name = "uri"
-    )]
+    #[structopt(long = "source_uri_base", value_name = "uri")]
     pub source_uri_base: Option<FetchSource>,
 
     #[structopt(skip)]
