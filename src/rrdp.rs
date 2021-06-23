@@ -673,6 +673,9 @@ impl CurrentObject {
             uri, data, since: Time::now()
         };
 
+        // Try to set the 'since' Time for this file so that the file mtime can be updated
+        // to reflect it. This is done because otherwise rsync clients may be decide that
+        // a file was changed based on the mtime and will try to retrieve it. See issue #25
         if let Err(e) = object.fix_since() {
             warn!("Could not derive creation time for object at uri: {}. Error: {}", object.uri(), e);
         }
