@@ -104,7 +104,7 @@ fn rename_new_revision_dir_to_current(
 
         if current_path.exists() {
             info!(
-                "Backing up rsync directory for previous revision to: {:?}",
+                "Renaming the rsync directory for previous revision to: {:?}",
                 current_preserve_path
             );
             std::fs::rename(&current_path, &current_preserve_path).with_context(|| {
