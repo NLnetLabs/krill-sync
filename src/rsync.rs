@@ -1,12 +1,11 @@
 use std::{
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
 use anyhow::{Context, Result};
 
+use filetime::{FileTime, set_file_mtime};
 use log::{info, trace};
-use rpki::uri;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -16,14 +15,6 @@ use crate::{
     rrdp::{CurrentObject, RrdpState},
     util::{self, Time},
 };
-
-fn make_rsync_repo_path(uri: &uri::Rsync) -> PathBuf {
-    // Drop the module as the proper module name is determined by and part of
-    // the rsyncd configuration and thus the user invoking krill-sync should
-    // ensure that they direct krill-sync to write the rsync files out to the
-    // directory that matches the location expected by rsyncd.
-    PathBuf::from_str(uri.path()).unwrap() // cannot fail (Infallible)
-}
 
 pub fn update_from_rrdp_state(
     rrdp_state: &RrdpState,
@@ -38,7 +29,7 @@ pub fn update_from_rrdp_state(
     };
 
     if changed {
-        write_rsync_content(&new_revision.path(config), rrdp_state.elements())?;
+        write_rsync_content(&new_revision.path(config), config.rsync_multiple_auth, rrdp_state.elements())?;
 
         if config.rsync_dir_use_symlinks() {
             symlink_current_to_new_revision_dir(&new_revision, config)?;
@@ -139,13 +130,23 @@ fn rename_new_revision_dir_to_current(
 
 fn write_rsync_content<'a>(
     out_path: &Path,
+    include_host_and_module: bool,
     elements: impl Iterator<Item = &'a CurrentObject>,
 ) -> Result<()> {
     info!("Writing rsync repository to: {:?}", out_path);
     for element in elements {
-        let path = out_path.join(make_rsync_repo_path(element.uri()));
+        let path = if include_host_and_module {
+            let uri = element.uri();
+            out_path.join(format!("{}/{}/{}", uri.authority(), uri.module_name(), uri.path()))
+        } else {
+            out_path.join(element.uri().path())
+        };
+
         trace!("Writing rsync file {:?}", &path);
         file_ops::write_buf(&path, element.data())?;
+
+        let mtime = FileTime::from_unix_time(element.since().timestamp(), 0);
+        set_file_mtime(&path, mtime)?;
     }
 
     Ok(())

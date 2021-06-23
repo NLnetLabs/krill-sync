@@ -6,17 +6,14 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use rpki::{
-    rrdp::{
+use rpki::{repository::{Crl, Manifest, Roa, cert::Cert, sigobj::SignedObject}, rrdp::{
         self, Delta, DeltaElement, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot,
         SnapshotInfo, UpdateElement, WithdrawElement,
-    },
-    uri::{Https, Rsync},
-};
+    }, uri::{Https, Rsync}};
 
 use crate::{
     config::Config,
@@ -50,7 +47,7 @@ pub struct RrdpState {
     serial: u64,
 
     /// Current objects (not serialized, recovered from snapshot xml at startup)
-    #[serde(skip)]
+    #[serde(with = "serde_current_object_map")]
     current_objects: CurrentObjectMap,
 
     /// Current snapshot state (xml, hash, path)
@@ -113,17 +110,13 @@ impl RrdpState {
             .with_context(|| format!("Cannot read state file at: {:?}", state_path))?;
 
         // Recover state with meta info from disk.
-        let mut recovered: RrdpState =
+        let recovered: RrdpState =
             serde_json::from_slice(json_bytes.as_ref()).with_context(|| {
                 format!(
                     "Cannot deserialize json for current state from {:?}",
                     state_path
                 )
             })?;
-
-        // Now reload and parse all xml files
-        recovered.recover_snapshot()?;
-        recovered.recover_deltas()?;
 
         info!(
             "Recovered prior state => session: {}, serial: {}",
@@ -133,53 +126,8 @@ impl RrdpState {
         Ok(recovered)
     }
 
-    fn recover_snapshot(&mut self) -> Result<()> {
-        debug!(
-            "Recover and verify snapshot for session {} and serial {}",
-            self.session_id(),
-            self.serial()
-        );
-        let snapshot_path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
-        let snapshot_bytes = file_ops::read_file(&snapshot_path)
-            .with_context(|| format!("Cannot read snapshot from {:?}", snapshot_path))?;
-
-        debug!("Parse snapshot");
-        let snapshot = Snapshot::parse(snapshot_bytes.as_ref())
-            .with_context(|| format!("Cannot parse snapshot from {:?}", snapshot_path))?;
-
-        debug!("Converting snapshot into elements");
-        self.current_objects = snapshot.into_elements().into();
-
-        debug!("Set xml");
-        self.snapshot.set_xml(snapshot_bytes);
-
-        Ok(())
-    }
-
-    fn recover_deltas(&mut self) -> Result<()> {
-        let base_dir = self.rrdp_dir.clone();
-        let session = self.session_id();
-
-        for delta in self.deltas.iter_mut() {
-            debug!(
-                "Recover and verify delta for session {} and serial {}",
-                session, delta.serial
-            );
-            let delta_path = Self::path_delta(&base_dir, session, delta.serial);
-
-            let delta_bytes = file_ops::read_file(&delta_path)
-                .with_context(|| format!("Cannot read delta file from {:?}", delta_path))?;
-
-            Delta::parse(delta_bytes.as_ref())
-                .with_context(|| format!("Cannot parse delta file from {:?}", delta_path))?;
-
-            delta.set_xml(delta_bytes);
-        }
-
-        Ok(())
-    }
-
     /// Try to update this state using the notification file found in the specified fetcher.
+    ///
     /// Returns:
     ///   Ok(true)  if there was an update
     ///   Ok(false) if there was no update (serial and session match current)
@@ -356,11 +304,11 @@ impl RrdpState {
         Ok(())
     }
 
-    /// Write out all *missing* RRDP files. Optionally delay writing the notification file for
+    /// Write out all *new* RRDP files. Optionally delay writing the notification file for
     /// the specified number of seconds
-    pub fn write_rrdp_files(&self, notify_delay: u64) -> Result<()> {
+    pub fn write_rrdp_files(&mut self, notify_delay: u64) -> Result<()> {
         self.write_snapshot()?;
-        self.write_missing_deltas()?;
+        self.write_new_deltas()?;
 
         if notify_delay > 0 {
             info!(
@@ -483,8 +431,8 @@ impl RrdpState {
         self.deprecated_files.push(DeprecatedFile::new(path));
     }
 
-    /// Writes a new notification file.
-    fn write_snapshot(&self) -> Result<()> {
+    /// Writes a snapshot file.
+    fn write_snapshot(&mut self) -> Result<()> {
         let path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
         if path.exists() {
             debug!("Skip writing existing snapshot file to {:?}", path)
@@ -492,10 +440,9 @@ impl RrdpState {
             info!("Writing snapshot file to {:?}", path);
             let xml = self
                 .snapshot
-                .xml()
-                .ok_or_else(|| anyhow!("Snapshot XML not recovered on startup"))?;
-            file_ops::write_buf(&path, xml)
-                .with_context(|| format!("Could not write snapshot XML to: {:?}", path))?;
+                .take_xml()
+                .ok_or_else(|| anyhow!("Snapshot XML no longer in memory, do not delete files! Restart from clean state!"))?;
+            file_ops::write_buf(&path, &xml).with_context(|| "Could not write snapshot XML")?;
         }
 
         Ok(())
@@ -509,20 +456,19 @@ impl RrdpState {
         self.deprecated_files.push(DeprecatedFile::new(path));
     }
 
-    /// Writes any deltas for which no current file is found. I.e. it is assumed
-    /// that a file which is present was not tampered with since writing it.
-    fn write_missing_deltas(&self) -> Result<()> {
-        for delta in &self.deltas {
-            let path = Self::path_delta(&self.rrdp_dir, self.session_id(), delta.serial);
+    /// Writes new deltas. I.e. deltas for which we have XML in memory.
+    fn write_new_deltas(&mut self) -> Result<()> {
+        let session_id = self.session_id();
+        for delta in self.deltas.iter_mut() {
+            let path = Self::path_delta(&self.rrdp_dir, session_id, delta.serial);
             if path.exists() {
                 debug!("Skip writing delta file to {:?}", path)
             } else {
                 info!("Writing delta file to {:?}", path);
                 let xml = delta
-                    .xml()
-                    .ok_or_else(|| anyhow!("Delta XML not recovered on startup"))?;
-                file_ops::write_buf(&path, xml)
-                    .with_context(|| format!("Could not write delta XML to: {:?}", path))?;
+                    .take_xml()
+                    .ok_or_else(|| anyhow!("Delta XML no longer in memory, do not delete files! Restart from clean state!"))?;
+                file_ops::write_buf(&path, &xml).with_context(|| "Could not write delta XML")?;
             }
         }
 
@@ -548,7 +494,7 @@ impl RrdpState {
 
 //------------ CurrentObjectMap ----------------------------------------------
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CurrentObjectMap(HashMap<String, CurrentObject>);
+pub struct CurrentObjectMap(HashMap<Hash, CurrentObject>);
 
 impl CurrentObjectMap {
     /// Create a new CurrentObjectMap by reading and parsing a snapshot file
@@ -584,37 +530,42 @@ impl CurrentObjectMap {
     }
 
     fn apply_publish(&mut self, publish: PublishElement) -> Result<()> {
-        let object: CurrentObject = publish.into();
+        let (uri, data) = publish.unpack();
+        let object: CurrentObject = CurrentObject::new(uri, data);
         #[allow(clippy::map_entry)]
-        if self.0.contains_key(object.uri().as_str()) {
+        if self.0.contains_key(&object.hash()) {
             Err(anyhow!(format!(
                 "Object with uri '{}' cannot be added (already present)",
                 object.uri()
             )))
         } else {
-            self.0.insert(object.uri().to_string(), object);
+            self.0.insert(object.hash(), object);
             Ok(())
         }
     }
 
     fn apply_update(&mut self, update: UpdateElement) -> Result<()> {
         let (uri, replaces, data) = update.unpack();
-        let object = CurrentObject { uri, data };
+        let object = CurrentObject::new(uri, data);
 
-        let old = self.0.get(object.uri().as_str()).ok_or_else(|| {
+        let old = self.0.get(&replaces).ok_or_else(|| {
             anyhow!(format!(
-                "Object for uri '{}' cannot be updated: not present",
-                object.uri()
+                "Object for uri '{}' and hash '{}' cannot be updated: not present",
+                object.uri(),
+                replaces
             ))
         })?;
 
-        if old.hash() != replaces {
+        if old.uri() != object.uri() {
             Err(anyhow!(format!(
-                "Object for uri '{}' cannot be updated: hash mismatch",
-                object.uri()
+                "Object for uri '{}' and hash '{}' cannot be updated: wrong uri: '{}'",
+                object.uri(),
+                replaces,
+                old.uri()
             )))
         } else {
-            self.0.insert(object.uri().to_string(), object);
+            self.0.remove(&replaces);
+            self.0.insert(object.hash(), object);
             Ok(())
         }
     }
@@ -622,20 +573,22 @@ impl CurrentObjectMap {
     fn apply_withdraw(&mut self, withdraw: WithdrawElement) -> Result<()> {
         let (uri, hash) = withdraw.unpack();
 
-        let old = self.0.get(uri.as_str()).ok_or_else(|| {
+        let old = self.0.get(&hash).ok_or_else(|| {
             anyhow!(format!(
-                "Object for uri '{}' cannot be removed: was not present",
-                uri
+                "Object for uri '{}' and hash '{}' cannot be removed: was not present",
+                uri, hash
             ))
         })?;
 
-        if old.hash() != hash {
+        if old.uri() != &uri {
             Err(anyhow!(format!(
-                "Object for uri '{}' cannot be withdrawn: hash mismatch",
-                uri
+                "Object for uri '{}' and hash '{}' cannot be withdrawn: wrong uri: '{}'",
+                uri,
+                hash,
+                old.uri()
             )))
         } else {
-            self.0.remove(uri.as_str());
+            self.0.remove(&hash);
             Ok(())
         }
     }
@@ -647,33 +600,89 @@ impl CurrentObjectMap {
     }
 }
 
-impl Default for CurrentObjectMap {
-    fn default() -> Self {
-        CurrentObjectMap(HashMap::new())
-    }
-}
-
 impl From<Vec<PublishElement>> for CurrentObjectMap {
     fn from(elements: Vec<PublishElement>) -> Self {
-        #[allow(clippy::mutable_key_type)]
         let mut map = HashMap::new();
         for el in elements.into_iter() {
-            let current_object: CurrentObject = el.into();
-            map.insert(current_object.uri().to_string(), current_object);
+            let (uri, data) = el.unpack();
+            let current_object: CurrentObject = CurrentObject::new(uri, data);
+            map.insert(current_object.hash(), current_object);
         }
         CurrentObjectMap(map)
     }
 }
 
+mod serde_current_object_map {
+    
+    use super::*;
+
+    use serde::de::{Deserialize, Deserializer};
+    use serde::ser::Serializer;
+
+    #[derive(Debug, Deserialize)]
+    struct Item {
+        hash: Hash,
+        object: CurrentObject,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ItemRef<'a> {
+        hash: &'a Hash,
+        object: &'a CurrentObject,
+    }
+
+    pub fn serialize<S>(map: &CurrentObjectMap, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_seq(
+            map.0.iter().map(|(hash, object)| ItemRef {  hash, object })
+        )
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<CurrentObjectMap, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut map = HashMap::new();
+        for item in Vec::<Item>::deserialize(deserializer)? {
+            map.insert(item.hash, item.object);
+        }
+        Ok(CurrentObjectMap(map))
+    }
+
+}
+
 //------------ CurrentObject -------------------------------------------------
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Serialize, PartialEq)]
 pub struct CurrentObject {
     uri: Rsync,
+
+    #[serde(deserialize_with = "util::de_bytes", serialize_with = "util::ser_bytes")]
     data: Bytes,
+    since: Time,
 }
 
 impl CurrentObject {
+    pub fn new(
+        uri: Rsync,
+        data: Bytes,
+    ) -> Self {
+        let mut object =  CurrentObject {
+            uri, data, since: Time::now()
+        };
+
+        // Try to set the 'since' Time for this file so that the file mtime can be updated
+        // to reflect it. This is done because otherwise rsync clients may be decide that
+        // a file was changed based on the mtime and will try to retrieve it. See issue #25
+        if let Err(e) = object.fix_since() {
+            warn!("Could not derive creation time for object at uri: {}. Error: {}", object.uri(), e);
+        }
+
+        object
+    }
+    
     pub fn uri(&self) -> &Rsync {
         &self.uri
     }
@@ -682,15 +691,48 @@ impl CurrentObject {
         &self.data
     }
 
+    pub fn since(&self) -> Time {
+        self.since
+    }
+
+    /// Fixes the since time based on the actual parsed object.
+    /// Returns an error if the object cannot be parsed.
+    fn fix_since(&mut self) -> Result<()> {
+        let uri_path= self.uri.path();
+        if uri_path.ends_with(".cer") {
+            let cer = Cert::decode(self.data.as_ref())
+                .map_err(|_| anyhow!("Cannot parse certificate"))?;
+            
+            self.since = cer.validity().not_before().into();
+        } else if uri_path.ends_with(".mft") {
+            let mft = Manifest::decode(self.data.as_ref(), false)
+                .map_err(|_| anyhow!("Cannot parse manifest"))?;
+            
+            self.since = mft.this_update().into();
+        } else if uri_path.ends_with(".crl") {
+            let crl = Crl::decode(self.data.as_ref())
+                .map_err(|_| anyhow!("Cannot parse CRL"))?;
+            
+            self.since = crl.this_update().into();
+        } else if uri_path.ends_with(".roa") {
+            let roa = Roa::decode(self.data.as_ref(), false)
+                .map_err(|_| anyhow!("Cannot parse ROA"))?;
+            
+            self.since = roa.cert().validity().not_before().into();
+        } else {
+            // Try to parse this as a generic RPKI signed object
+            if let Ok(sig_obj) = SignedObject::decode(self.data.as_ref(), false) {
+                self.since = sig_obj.cert().validity().not_before().into();
+            } else {
+                return Err(anyhow!(format!("Cannot parse object type to derive mtime for object with uri: {}", self.uri())))
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn hash(&self) -> Hash {
         Hash::from_data(&self.data)
-    }
-}
-
-impl From<PublishElement> for CurrentObject {
-    fn from(el: PublishElement) -> Self {
-        let (uri, data) = el.unpack();
-        CurrentObject { uri, data }
     }
 }
 
@@ -728,12 +770,8 @@ impl SnapshotState {
         self.hash
     }
 
-    pub fn xml(&self) -> Option<&Bytes> {
-        self.xml.as_ref()
-    }
-
-    fn set_xml(&mut self, bytes: Bytes) {
-        self.xml = Some(bytes);
+    pub fn take_xml(&mut self) -> Option<Bytes> {
+        std::mem::replace(&mut self.xml, None)
     }
 }
 
@@ -779,12 +817,8 @@ impl DeltaState {
         self.hash
     }
 
-    pub fn xml(&self) -> Option<&Bytes> {
-        self.xml.as_ref()
-    }
-
-    fn set_xml(&mut self, bytes: Bytes) {
-        self.xml = Some(bytes);
+    pub fn take_xml(&mut self) -> Option<Bytes> {
+        std::mem::replace(&mut self.xml, None)
     }
 }
 
@@ -811,6 +845,27 @@ mod tests {
     use crate::util::{https, test_with_dir};
 
     use super::*;
+
+    #[test]
+    fn time_stamp_from_objects() {
+        let snapshot_xml = include_bytes!("../test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/snapshot.xml");
+        let snapshot = Snapshot::parse(snapshot_xml.as_ref()).unwrap();
+
+        fn find_current_object(snapshot: &Snapshot, ext: &str) -> CurrentObject {
+            let (uri, data) = snapshot.elements().iter()
+                .find(|e| e.uri().ends_with(ext)).unwrap().clone().unpack();
+            CurrentObject::new(uri, data)
+        }
+
+        let cer = find_current_object(&snapshot, ".cer");
+        let mft = find_current_object(&snapshot, ".mft");
+        let crl = find_current_object(&snapshot, ".crl");
+        let roa = find_current_object(&snapshot, ".roa");
+        assert_eq!(1600268228, cer.since.timestamp());
+        assert_eq!(1622637098, mft.since.timestamp());
+        assert_eq!(1622621702, crl.since.timestamp());
+        assert_eq!(1620657233, roa.since.timestamp());
+    }
 
     #[test]
     fn process_update_no_change() {
@@ -841,7 +896,7 @@ mod tests {
             let config = create_test_config(&dir, notification_uri, source_uri_base);
 
             // Build state from source
-            let state = RrdpState::create(&config).unwrap();
+            let mut state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
             state.persist(&config.rrdp_state_path()).unwrap();
 
@@ -881,7 +936,7 @@ mod tests {
             let config = create_test_config(&dir, notification_uri, source_uri_base);
 
             // Build state from source
-            let state = RrdpState::create(&config).unwrap();
+            let mut state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
             state.persist(&config.rrdp_state_path()).unwrap();
 
@@ -921,7 +976,7 @@ mod tests {
             let config = create_test_config(&dir, notification_uri, source_uri_base);
 
             // Build state from source
-            let state = RrdpState::create(&config).unwrap();
+            let mut state = RrdpState::create(&config).unwrap();
             state.write_rrdp_files(0).unwrap();
             state.persist(&config.rrdp_state_path()).unwrap();
 

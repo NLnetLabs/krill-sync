@@ -204,4 +204,18 @@ mod tests {
             process(&config).unwrap();
         })
     }
+
+    #[test]
+    fn build_from_clean_state_with_multiple_rsync() {
+        test_with_dir("build_from_clean_state_with_multiple_rsync", |dir| {
+            let notification_uri =
+                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+            let source_uri_base = "./test-resources/rrdp-rev2656/";
+
+            let mut config = create_test_config(&dir, notification_uri, source_uri_base);
+            config.rsync_multiple_auth = true;
+
+            process(&config).unwrap(); // basically test that it does not blow up, manually inspected the structure.
+        })
+    }
 }

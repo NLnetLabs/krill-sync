@@ -108,6 +108,10 @@ pub struct Config {
     #[structopt(long = "rsync-disable")]
     pub rsync_disable: bool,
 
+    /// Support different rsync base URIs, include host and module: <rsync_dir>/current/<host>/<module>/..
+     #[structopt(long = "full-rsync-path")]
+     pub rsync_multiple_auth: bool,
+
     /// Remove unreferenced files and directories older than X seconds
     #[structopt(long = "cleanup-after", value_name = "seconds", default_value = DEFAULT_CLEANUP_SECONDS)]
     pub cleanup_after: i64,
@@ -119,7 +123,7 @@ pub struct Config {
     /// The public RRDP notification URI
     pub notification_uri: Https,
 
-    /// Base uri for the notify file on the back-end server. Must end with a slash.
+    /// Slash terminated base uri for the notify file source
     #[structopt(
         long = "source_uri_base",
         value_name = "uri"
@@ -193,6 +197,7 @@ pub fn create_test_config(
         rsync_dir,
         rsync_dir_force_moves: false,
         rsync_disable: false,
+        rsync_multiple_auth: false,
         cleanup_after: 2,
         insecure: false,
         notification_uri,
