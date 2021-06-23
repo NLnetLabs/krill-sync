@@ -6,17 +6,14 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use rpki::{
-    rrdp::{
+use rpki::{repository::{Crl, Manifest, Roa, cert::Cert, sigobj::SignedObject}, rrdp::{
         self, Delta, DeltaElement, DeltaInfo, Hash, NotificationFile, PublishElement, Snapshot,
         SnapshotInfo, UpdateElement, WithdrawElement,
-    },
-    uri::{Https, Rsync},
-};
+    }, uri::{Https, Rsync}};
 
 use crate::{
     config::Config,
@@ -533,7 +530,8 @@ impl CurrentObjectMap {
     }
 
     fn apply_publish(&mut self, publish: PublishElement) -> Result<()> {
-        let object: CurrentObject = publish.into();
+        let (uri, data) = publish.unpack();
+        let object: CurrentObject = CurrentObject::new(uri, data);
         #[allow(clippy::map_entry)]
         if self.0.contains_key(&object.hash()) {
             Err(anyhow!(format!(
@@ -548,7 +546,7 @@ impl CurrentObjectMap {
 
     fn apply_update(&mut self, update: UpdateElement) -> Result<()> {
         let (uri, replaces, data) = update.unpack();
-        let object = CurrentObject { uri, data };
+        let object = CurrentObject::new(uri, data);
 
         let old = self.0.get(&replaces).ok_or_else(|| {
             anyhow!(format!(
@@ -602,18 +600,12 @@ impl CurrentObjectMap {
     }
 }
 
-impl Default for CurrentObjectMap {
-    fn default() -> Self {
-        CurrentObjectMap(HashMap::new())
-    }
-}
-
 impl From<Vec<PublishElement>> for CurrentObjectMap {
     fn from(elements: Vec<PublishElement>) -> Self {
-        #[allow(clippy::mutable_key_type)]
         let mut map = HashMap::new();
         for el in elements.into_iter() {
-            let current_object: CurrentObject = el.into();
+            let (uri, data) = el.unpack();
+            let current_object: CurrentObject = CurrentObject::new(uri, data);
             map.insert(current_object.hash(), current_object);
         }
         CurrentObjectMap(map)
@@ -663,15 +655,34 @@ mod serde_current_object_map {
 
 //------------ CurrentObject -------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Serialize, PartialEq)]
 pub struct CurrentObject {
     uri: Rsync,
 
     #[serde(deserialize_with = "util::de_bytes", serialize_with = "util::ser_bytes")]
     data: Bytes,
+    since: Time,
 }
 
 impl CurrentObject {
+    pub fn new(
+        uri: Rsync,
+        data: Bytes,
+    ) -> Self {
+        let mut object =  CurrentObject {
+            uri, data, since: Time::now()
+        };
+
+        // Try to set the 'since' Time for this file so that the file mtime can be updated
+        // to reflect it. This is done because otherwise rsync clients may be decide that
+        // a file was changed based on the mtime and will try to retrieve it. See issue #25
+        if let Err(e) = object.fix_since() {
+            warn!("Could not derive creation time for object at uri: {}. Error: {}", object.uri(), e);
+        }
+
+        object
+    }
+    
     pub fn uri(&self) -> &Rsync {
         &self.uri
     }
@@ -680,15 +691,48 @@ impl CurrentObject {
         &self.data
     }
 
+    pub fn since(&self) -> Time {
+        self.since
+    }
+
+    /// Fixes the since time based on the actual parsed object.
+    /// Returns an error if the object cannot be parsed.
+    fn fix_since(&mut self) -> Result<()> {
+        let uri_path= self.uri.path();
+        if uri_path.ends_with(".cer") {
+            let cer = Cert::decode(self.data.as_ref())
+                .map_err(|_| anyhow!("Cannot parse certificate"))?;
+            
+            self.since = cer.validity().not_before().into();
+        } else if uri_path.ends_with(".mft") {
+            let mft = Manifest::decode(self.data.as_ref(), false)
+                .map_err(|_| anyhow!("Cannot parse manifest"))?;
+            
+            self.since = mft.this_update().into();
+        } else if uri_path.ends_with(".crl") {
+            let crl = Crl::decode(self.data.as_ref())
+                .map_err(|_| anyhow!("Cannot parse CRL"))?;
+            
+            self.since = crl.this_update().into();
+        } else if uri_path.ends_with(".roa") {
+            let roa = Roa::decode(self.data.as_ref(), false)
+                .map_err(|_| anyhow!("Cannot parse ROA"))?;
+            
+            self.since = roa.cert().validity().not_before().into();
+        } else {
+            // Try to parse this as a generic RPKI signed object
+            if let Ok(sig_obj) = SignedObject::decode(self.data.as_ref(), false) {
+                self.since = sig_obj.cert().validity().not_before().into();
+            } else {
+                return Err(anyhow!(format!("Cannot parse object type to derive mtime for object with uri: {}", self.uri())))
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn hash(&self) -> Hash {
         Hash::from_data(&self.data)
-    }
-}
-
-impl From<PublishElement> for CurrentObject {
-    fn from(el: PublishElement) -> Self {
-        let (uri, data) = el.unpack();
-        CurrentObject { uri, data }
     }
 }
 
@@ -801,6 +845,27 @@ mod tests {
     use crate::util::{https, test_with_dir};
 
     use super::*;
+
+    #[test]
+    fn time_stamp_from_objects() {
+        let snapshot_xml = include_bytes!("../test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/snapshot.xml");
+        let snapshot = Snapshot::parse(snapshot_xml.as_ref()).unwrap();
+
+        fn find_current_object(snapshot: &Snapshot, ext: &str) -> CurrentObject {
+            let (uri, data) = snapshot.elements().iter()
+                .find(|e| e.uri().ends_with(ext)).unwrap().clone().unpack();
+            CurrentObject::new(uri, data)
+        }
+
+        let cer = find_current_object(&snapshot, ".cer");
+        let mft = find_current_object(&snapshot, ".mft");
+        let crl = find_current_object(&snapshot, ".crl");
+        let roa = find_current_object(&snapshot, ".roa");
+        assert_eq!(1600268228, cer.since.timestamp());
+        assert_eq!(1622637098, mft.since.timestamp());
+        assert_eq!(1622621702, crl.since.timestamp());
+        assert_eq!(1620657233, roa.since.timestamp());
+    }
 
     #[test]
     fn process_update_no_change() {
