@@ -4,6 +4,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
+use filetime::{FileTime, set_file_mtime};
 use log::{info, trace};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -143,6 +144,9 @@ fn write_rsync_content<'a>(
 
         trace!("Writing rsync file {:?}", &path);
         file_ops::write_buf(&path, element.data())?;
+
+        let mtime = FileTime::from_unix_time(element.since().timestamp(), 0);
+        set_file_mtime(&path, mtime)?;
     }
 
     Ok(())

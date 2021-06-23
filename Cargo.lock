@@ -25,6 +25,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 
 [[package]]
+name = "bcder"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c16eb8ab9a5deef7188129b3ea73775a67fa07cc153ebe8d4b08ea21985d9c5b"
+dependencies = [
+ "bytes",
+ "smallvec",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -127,6 +137,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c9a4820f0ccc8a7afd67c39a0f1a0f4b07ca1725164271a64939d7aeb9af065"
 dependencies = [
  "log",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d34cfa13a63ae058bfa601fe9e313bbdb3746427c1459185464ce0fcf62e1e8"
+dependencies = [
+ "cfg-if 1.0.0",
+ "libc",
+ "redox_syscall",
+ "winapi",
 ]
 
 [[package]]
@@ -386,6 +408,7 @@ dependencies = [
  "chrono",
  "ctrlc",
  "fern",
+ "filetime",
  "log",
  "reqwest",
  "rpki",
@@ -760,12 +783,14 @@ version = "0.11.1-dev"
 source = "git+https://github.com/NLnetLabs/rpki-rs.git?branch=main#f0006134f918bbdbde833ba665d0bd71c4f167b3"
 dependencies = [
  "base64 0.13.0",
+ "bcder",
  "bytes",
  "chrono",
  "log",
  "quick-xml",
  "ring",
  "serde",
+ "untrusted",
  "uuid",
 ]
 
@@ -880,6 +905,12 @@ name = "slab"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f173ac3d1a7e3b28003f40de0b5ce7fe2710f9b9dc3fc38664cebee46b3b6527"
+
+[[package]]
+name = "smallvec"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe0f37c9e8f3c5a4a66ad655a93c74daac4ad00c441533bf5c6e7990bb42604e"
 
 [[package]]
 name = "socket2"
