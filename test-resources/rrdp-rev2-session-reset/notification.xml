@@ -1,0 +1,5 @@
+<notification xmlns="http://www.ripe.net/rpki/rrdp" version="1" session_id="bf64ea72-ebb8-462f-99fb-8cd06f418565" serial="2">
+  <snapshot uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/bf64ea72-ebb8-462f-99fb-8cd06f418565/2/snapshot.xml" hash="f25efefcda5b5c6447bee58495457e7900d62102db54f38c0515f6f4300f4669" />
+  <delta serial="2" uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/bf64ea72-ebb8-462f-99fb-8cd06f418565/2/delta.xml" hash="cc13c234b3211a7261cecc08bbc8c5d1f83f2f0c7ca710aff26c3aa01838e14c" />
+  <delta serial="1" uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/bf64ea72-ebb8-462f-99fb-8cd06f418565/1/delta.xml" hash="8ad222b7224fd10b2a96b5bf0435b23bc84fdc339cc69d45549d9ab5e0f8e61a" />
+</notification>

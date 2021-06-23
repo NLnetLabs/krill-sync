@@ -1,8 +1,8 @@
 extern crate rustc_version;
-use rustc_version::{Version, version};
+use rustc_version::{version, Version};
 
 extern crate vergen;
-use vergen::{ConstantsFlags, generate_cargo_keys};
+use vergen::{generate_cargo_keys, ConstantsFlags};
 
 fn main() {
     let version = version().expect("Failed to get rustc version.");
@@ -11,12 +11,11 @@ fn main() {
             "\n\nAt least Rust version 1.42 is required.\n\
              Version {} is used for building.\n\
              Build aborted.\n\n",
-             version);
+            version
+        );
         panic!();
     }
 
-    let flags = ConstantsFlags::SHA_SHORT|
-                ConstantsFlags::REBUILD_ON_HEAD_CHANGE;
-    generate_cargo_keys(flags)
-        .expect("Unable to generate version env vars!");
+    let flags = ConstantsFlags::SHA_SHORT | ConstantsFlags::REBUILD_ON_HEAD_CHANGE;
+    generate_cargo_keys(flags).expect("Unable to generate version env vars!");
 }
