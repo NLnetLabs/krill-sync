@@ -1,12 +1,12 @@
-use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 
+use fslock::LockFile;
 use krill_sync::{
     config::{configure, Config},
-    file_ops::write_buf,
     process::process,
 };
+use log::debug;
 
 fn main() {
     if let Err(err) = configure_and_try_main() {
@@ -20,49 +20,27 @@ fn configure_and_try_main() -> Result<()> {
 }
 
 fn try_main(config: Config) -> Result<()> {
-    let pid_file = config.pid_file.to_owned();
-    if let Err(err) = lock(&pid_file) {
-        return Err(anyhow!(
-            "Failed to create lock file {:?}: {} (tip: use --pid-file to \
-            change the location of the lock file) ",
-            &pid_file,
-            err
-        ));
-    }
-
-    let process_res = process(config);
-    if let Err(e) = unlock(&pid_file) {
-        eprint!("Failed to remove pid file {:?}: {}", pid_file, e);
-    }
-
-    process_res
+    // secure lock, note: will be unlocked when the LockFile goes out of scope.
+    let _lock_file = lock(&config)?;
+    process(&config)
 }
 
-pub fn lock(pid_file: &Path) -> Result<()> {
-    if pid_file.is_file() {
-        return Err(anyhow!("Lock file {:?} exists, aborting", &pid_file));
-    }
-    write_buf(
-        &pid_file,
-        &format!("{}\n", std::process::id()).as_bytes().to_vec(),
-    )?;
-
-    // Ensure the lock file is removed even if we are killed by SIGINT or SIGTERM
-    let unlock_pid_file = pid_file.to_owned();
-    ctrlc::set_handler(move || {
-        eprintln!("CTRL-C caught, aborting.");
-        unlock(&unlock_pid_file).unwrap();
-        std::process::exit(1);
-    })
-    .expect("Error setting Ctrl-C handler");
-
-    Ok(())
-}
-
-pub fn unlock(pid_file: &Path) -> Result<()> {
-    if pid_file.is_file() {
-        std::fs::remove_file(pid_file)?;
+fn lock(config: &Config) -> Result<LockFile> {
+    if !config.state_dir.exists() {
+        debug!("State directory '{:?}' does not exist yet, will try to create it.", config.state_dir);
+        std::fs::create_dir_all(&config.state_dir)
+            .with_context(|| format!("Cannot create state directory: {:?}", config.state_dir))?;
     }
 
-    Ok(())
+    let lock_file_path = config.lock_file();
+    let mut lock_file = LockFile::open(&lock_file_path)
+        .with_context(|| format!("Cannot open lockfile: {:?}", lock_file_path))?;
+    
+    if !lock_file.try_lock()
+        .with_context(|| format!("Cannot lock using lockfile: {:?}", lock_file_path))?
+    {
+        Err(anyhow!(format!("another krill-sync process holds the lock at {:?}", lock_file_path)))
+    } else {
+        Ok(lock_file)
+    }
 }
