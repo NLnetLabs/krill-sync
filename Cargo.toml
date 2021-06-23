@@ -14,7 +14,6 @@ readme = "README.md"
 anyhow = "1.0.32"
 base64 = "0.12.3"
 bytes = "1.0"
-ctrlc = {version = "3.1.6", features = ["termination"] }
 chrono = "0.4.18"
 fern = "0.6.0"
 filetime = "0.2"
