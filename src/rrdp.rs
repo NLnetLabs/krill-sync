@@ -468,7 +468,7 @@ impl RrdpState {
                 let xml = delta
                     .take_xml()
                     .ok_or_else(|| anyhow!("Delta XML no longer in memory, do not delete files! Restart from clean state!"))?;
-                file_ops::write_buf(&path, &xml).with_context(|| "Could not write delta XML")?;
+                file_ops::write_buf(&path, &xml).with_context(|| format!("Could not write delta XML to {:?}", path))?;
             }
         }
 
