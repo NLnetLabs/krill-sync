@@ -75,10 +75,6 @@ pub struct Config {
     #[structopt(short = "q", long = "quiet", conflicts_with = "verbose")]
     pub quiet: bool,
 
-    /// The location to write our process ID to
-    #[structopt(long = "pid-file", value_name = "file", parse(from_os_str), default_value = DEFAULT_PID_FILE_PATH)]
-    pub pid_file: PathBuf,
-
     /// The directory to write state to
     #[structopt(long = "state-dir", value_name = "dir", short = "s", parse(from_os_str), default_value = DEFAULT_STATE_DIR)]
     pub state_dir: PathBuf,
@@ -184,12 +180,10 @@ pub fn create_test_config(
     let state_dir = work_dir.join("state");
     let rrdp_dir = work_dir.join("rrdp");
     let rsync_dir = work_dir.join("rsync");
-    let pid_file = work_dir.join("krill-sync.pid");
 
     let config = Config {
         verbose: 0,
         quiet: false,
-        pid_file,
         state_dir,
         rrdp_dir,
         rrdp_notify_delay: 0,

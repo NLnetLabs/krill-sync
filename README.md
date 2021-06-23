@@ -201,7 +201,6 @@ FLAGS:
 
 OPTIONS:
         --cleanup-after <seconds>        Remove unreferenced files and directories older than X seconds [default: 600]
-        --pid-file <file>                The location to write our process ID to [default: /var/run/krill-sync.pid]
         --rrdp-dir <dir>                 The directory to write RRDP files to [default: /var/lib/krill-sync/rrdp]
         --rrdp-max-deltas <number>       Optional hard upper limit to the number of deltas
         --rrdp-notify-delay <seconds>    Delay seconds before writing the notification.xml file [default: 0]
