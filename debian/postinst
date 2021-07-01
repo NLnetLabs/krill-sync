@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+KRILL_HOME="/var/lib/krill-sync/"
+KRILL_USER="krill"
+
+create_user() {
+    if id ${KRILL_USER} > /dev/null 2>&1; then return; fi
+    adduser --system --home "${KRILL_HOME}" --group ${KRILL_USER}
+}
+
+create_dirs() {
+    mkdir -p "${KRILL_HOME}/rrdp"
+    mkdir -p "${KRILL_HOME}/rsync"
+    chown -R ${KRILL_USER} ${KRILL_HOME}
+}
+
+case "$1" in
+configure)
+    create_user
+    create_dirs
+    ;;
+esac
+
+#DEBHELPER#
