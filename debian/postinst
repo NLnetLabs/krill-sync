@@ -2,7 +2,7 @@
 set -e
 
 KRILL_HOME="/var/lib/krill-sync/"
-KRILL_USER="krill"
+KRILL_USER="krillsync"
 
 create_user() {
     if id ${KRILL_USER} > /dev/null 2>&1; then return; fi
