@@ -9,16 +9,9 @@ create_user() {
     adduser --system --home "${KRILL_HOME}" --group ${KRILL_USER}
 }
 
-create_dirs() {
-    mkdir -p "${KRILL_HOME}/rrdp"
-    mkdir -p "${KRILL_HOME}/rsync"
-    chown -R ${KRILL_USER} ${KRILL_HOME}
-}
-
 case "$1" in
 configure)
     create_user
-    create_dirs
     ;;
 esac
 
