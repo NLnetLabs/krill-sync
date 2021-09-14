@@ -18,7 +18,7 @@ pub fn process(config: &Config) -> Result<()> {
         changed = recovered.update(config.rrdp_max_deltas, &config.fetcher())?;
         recovered
     } else {
-        RrdpState::create(&config)?
+        RrdpState::create(config)?
     };
 
     // ===================================================================
@@ -45,7 +45,7 @@ pub fn process(config: &Config) -> Result<()> {
     // We will also clean out old rsync directories if they had been deprecated
     // for more than the 'cleanup_after' time.
     if config.rsync_enabled() {
-        rsync::update_from_rrdp_state(&rrdp_state, changed, &config)?;
+        rsync::update_from_rrdp_state(&rrdp_state, changed, config)?;
     }
 
     // ============================
@@ -60,7 +60,7 @@ pub fn process(config: &Config) -> Result<()> {
 
     // Clean up any RRDP files and empty parent directories if they had been
     // deprecated for more than the configured 'cleanup_after' time.
-    rrdp_state.clean(&config)?;
+    rrdp_state.clean(config)?;
 
     // ==============
     // Persist state.

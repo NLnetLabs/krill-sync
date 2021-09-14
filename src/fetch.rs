@@ -285,7 +285,7 @@ impl Fetcher {
     fn resolve_source(&self, uri: &uri::Https) -> Result<FetchSource> {
         match &self.fetch_map {
             None => Ok(FetchSource::Uri(uri.clone())),
-            Some(map) => map.source(&uri),
+            Some(map) => map.source(uri),
         }
     }
 }
