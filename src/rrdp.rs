@@ -390,25 +390,28 @@ impl RrdpState {
     /// temporary file and then rename it to avoid serving partially
     /// written files.
     pub fn write_notification(&self) -> Result<()> {
-        let tmp_path = self.rrdp_dir.join("notification.tmp");
-        let final_path = self.rrdp_dir.join("notification.xml");
+        let notification_file_filename_final = self.notification_uri.notify_filename()?;
+        let notification_file_filename_tmp = format!("{}.tmp", notification_file_filename_final);
 
-        info!("Updating notification file at {:?}", final_path);
+        let path_final = self.rrdp_dir.join(notification_file_filename_final);
+        let path_tmp = self.rrdp_dir.join(notification_file_filename_tmp);
+
+        info!("Updating notification file at {:?}", path_final);
 
         let notification = self.make_notification_file()?;
 
         let mut bytes: Vec<u8> = vec![];
         notification.write_xml(&mut bytes)?;
 
-        file_ops::write_buf(&tmp_path, &bytes).with_context(|| {
+        file_ops::write_buf(&path_tmp, &bytes).with_context(|| {
             format!(
                 "Could not write temporary notification file to: {:?}",
-                tmp_path
+                path_tmp
             )
         })?;
 
-        fs::rename(&tmp_path, &final_path)
-            .with_context(|| format!("Could not rename {:?} to {:?}", tmp_path, final_path))?;
+        fs::rename(&path_tmp, &path_final)
+            .with_context(|| format!("Could not rename {:?} to {:?}", path_tmp, path_final))?;
 
         Ok(())
     }
@@ -522,6 +525,22 @@ impl NotificationUri {
         self.0
             .parent()
             .ok_or_else(|| anyhow!("Illegal notification uri: {}", self.0))
+    }
+
+    fn notify_filename(&self) -> Result<String> {
+        let uri = self.0.as_str();
+        let idx = uri
+            .rfind('/')
+            .ok_or_else(|| anyhow!("Illegal notification uri: {}", self.0))?;
+
+        if idx + 1 == uri.len() {
+            Err(anyhow!(
+                "Illegal notification uri, ends with a slash: {}",
+                self.0
+            ))
+        } else {
+            Ok(self.0.as_str()[idx + 1..].to_string())
+        }
     }
 }
 
@@ -1055,7 +1074,7 @@ mod tests {
 
             // Update
             let notification_uri =
-                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notifyerthingy.xml");
             let source_uri_base_session_reset = "./test-resources/rrdp-rev2-session-reset/";
             let config_session_reset =
                 create_test_config(&dir, notification_uri, source_uri_base_session_reset);

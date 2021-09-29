@@ -218,4 +218,23 @@ mod tests {
             process(&config).unwrap(); // basically test that it does not blow up, manually inspected the structure.
         })
     }
+
+    #[test]
+    fn preserve_notification_file_name() {
+        test_with_dir("preserve_notification_file_name", |dir| {
+            let notification_uri =
+                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notifyerthingy.xml");
+            let source_uri_base = "./test-resources/rrdp-rev2-session-reset/";
+
+            let mut config = create_test_config(&dir, notification_uri, source_uri_base);
+            config.rsync_multiple_auth = true;
+
+            process(&config).unwrap();
+
+            assert_file_dir_exists("./test/preserve_notification_file_name/rsync/current");
+            assert_file_dir_exists(
+                "./test/preserve_notification_file_name/rrdp/notifyerthingy.xml",
+            );
+        })
+    }
 }
