@@ -92,7 +92,7 @@ impl RrdpState {
             return Err(anyhow!("Notification file contained gaps in deltas"));
         }
 
-        let deltas = Self::read_deltas(notification_file.deltas(), &fetcher)?;
+        let deltas = Self::read_deltas(&notification_uri, notification_file.deltas(), &fetcher)?;
 
         info!("Done building up state");
 
@@ -239,12 +239,9 @@ impl RrdpState {
         let cut_off_idx_opt = self.deltas.iter().position(|c| c.serial < before);
 
         if let Some(cut_off_idx) = cut_off_idx_opt {
-            let mut delta_serials_remove = vec![];
-            for delta in self.deltas.drain(cut_off_idx..) {
-                delta_serials_remove.push(delta.serial())
-            }
-            for serial in delta_serials_remove {
-                self.deprecate_delta_file(serial);
+            let deltas: Vec<DeltaState> = self.deltas.drain(cut_off_idx..).collect();
+            for delta in deltas {
+                self.deprecate_delta_file(&delta);
             }
         }
     }
@@ -267,8 +264,9 @@ impl RrdpState {
             )))
         } else {
             info!("Applying delta for serial: {}", delta_info.serial());
+            let rel_path = self.notification_uri.relative(delta_info.uri())?;
             let delta = fetcher.read_delta_file(delta_info)?;
-            let delta_state = DeltaState::create(&delta);
+            let delta_state = DeltaState::create(&delta, rel_path);
             self.current_objects.apply_delta(delta)?;
             self.deltas.push_front(delta_state);
             self.serial += 1;
@@ -280,13 +278,18 @@ impl RrdpState {
     /// VecDeque of DeltaInfo. Used when the actual RRDP current state is
     /// derived from a snapshot, but all deltas on notification file need
     /// to be downloaded so that they may be made available.
-    fn read_deltas(deltas: &[DeltaInfo], fetcher: &Fetcher) -> Result<VecDeque<DeltaState>> {
+    fn read_deltas(
+        notification_uri: &NotificationUri,
+        deltas: &[DeltaInfo],
+        fetcher: &Fetcher,
+    ) -> Result<VecDeque<DeltaState>> {
         let mut res = VecDeque::new();
 
-        for delta in deltas {
-            debug!("Read delta from {}", delta.uri());
-            let delta = fetcher.read_delta_file(delta)?;
-            let delta = DeltaState::create(&delta);
+        for delta_info in deltas {
+            debug!("Read delta from {}", delta_info.uri());
+            let rel_path = notification_uri.relative(delta_info.uri())?;
+            let delta = fetcher.read_delta_file(delta_info)?;
+            let delta = DeltaState::create(&delta, rel_path);
             res.push_front(delta);
         }
 
@@ -315,7 +318,8 @@ impl RrdpState {
             self.current_objects
                 .derive_snapshot(self.session_id(), self.serial(), rel_path);
 
-        self.deltas = Self::read_deltas(notification_file.deltas(), fetcher)?;
+        self.deltas =
+            Self::read_deltas(&self.notification_uri, notification_file.deltas(), fetcher)?;
 
         Ok(())
     }
@@ -450,10 +454,7 @@ impl RrdpState {
             debug!("Skip writing existing snapshot file to {:?}", path)
         } else {
             info!("Writing snapshot file to {:?}", path);
-            let xml = self
-                .snapshot
-                .take_xml()
-                .ok_or_else(|| anyhow!("Snapshot XML no longer in memory, do not delete files! Restart from clean state!"))?;
+            let xml = self.snapshot.xml();
             file_ops::write_buf(&path, &xml).with_context(|| "Could not write snapshot XML")?;
         }
 
@@ -463,23 +464,20 @@ impl RrdpState {
     /// Marks a delta file as deprecated. Assumes that the session id is still unchanged. If the
     /// there would be a session id reset, then deprecate files for the old session id first, before
     /// updating the current session id.
-    fn deprecate_delta_file(&mut self, serial: u64) {
-        let path = Self::path_delta(&self.rrdp_dir, self.session_id(), serial);
+    fn deprecate_delta_file(&mut self, delta: &DeltaState) {
+        let path = self.path_delta(delta);
         self.deprecated_files.push(DeprecatedFile::new(path));
     }
 
     /// Writes new deltas. I.e. deltas for which we have XML in memory.
     fn write_new_deltas(&mut self) -> Result<()> {
-        let session_id = self.session_id();
-        for delta in self.deltas.iter_mut() {
-            let path = Self::path_delta(&self.rrdp_dir, session_id, delta.serial);
+        for delta in &self.deltas {
+            let path = self.path_delta(delta);
             if path.exists() {
                 debug!("Skip writing delta file to {:?}", path)
             } else {
                 info!("Writing delta file to {:?}", path);
-                let xml = delta
-                    .take_xml()
-                    .ok_or_else(|| anyhow!("Delta XML no longer in memory, do not delete files! Restart from clean state!"))?;
+                let xml = delta.xml();
                 file_ops::write_buf(&path, &xml)
                     .with_context(|| format!("Could not write delta XML to {:?}", path))?;
             }
@@ -492,8 +490,8 @@ impl RrdpState {
         self.rrdp_dir.join(self.snapshot.rel_path())
     }
 
-    fn path_delta(base_dir: &Path, session: Uuid, serial: u64) -> PathBuf {
-        base_dir.join(Self::rel_path_delta(session, serial))
+    fn path_delta(&self, delta: &DeltaState) -> PathBuf {
+        self.rrdp_dir.join(delta.rel_path())
     }
 
     fn rel_path_delta(session: Uuid, serial: u64) -> String {
@@ -787,8 +785,11 @@ pub struct SnapshotState {
     hash: rrdp::Hash,
     rel_path: String,
 
-    #[serde(skip)]
-    xml: Option<Bytes>,
+    #[serde(
+        deserialize_with = "util::de_bytes",
+        serialize_with = "util::ser_bytes"
+    )]
+    xml: Bytes,
 }
 
 impl SnapshotState {
@@ -804,7 +805,7 @@ impl SnapshotState {
             since,
             hash,
             rel_path,
-            xml: Some(xml),
+            xml,
         }
     }
 
@@ -816,8 +817,8 @@ impl SnapshotState {
         self.rel_path.as_str()
     }
 
-    pub fn take_xml(&mut self) -> Option<Bytes> {
-        std::mem::replace(&mut self.xml, None)
+    pub fn xml(&self) -> &Bytes {
+        &self.xml
     }
 }
 
@@ -831,13 +832,17 @@ pub struct DeltaState {
     since: Time,
     serial: u64,
     hash: rrdp::Hash,
+    rel_path: String,
 
-    #[serde(skip)]
-    xml: Option<Bytes>,
+    #[serde(
+        deserialize_with = "util::de_bytes",
+        serialize_with = "util::ser_bytes"
+    )]
+    xml: Bytes,
 }
 
 impl DeltaState {
-    fn create(delta: &Delta) -> Self {
+    fn create(delta: &Delta, rel_path: String) -> Self {
         let since = Time::now();
         let serial = delta.serial();
 
@@ -851,7 +856,8 @@ impl DeltaState {
             since,
             serial,
             hash,
-            xml: Some(xml),
+            rel_path,
+            xml,
         }
     }
 
@@ -863,8 +869,12 @@ impl DeltaState {
         self.hash
     }
 
-    pub fn take_xml(&mut self) -> Option<Bytes> {
-        std::mem::replace(&mut self.xml, None)
+    pub fn rel_path(&self) -> &str {
+        self.rel_path.as_str()
+    }
+
+    pub fn xml(&self) -> &Bytes {
+        &self.xml
     }
 }
 
@@ -895,7 +905,7 @@ mod tests {
     #[test]
     fn time_stamp_from_objects() {
         let snapshot_xml = include_bytes!(
-            "../test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/random123/snapshot.xml"
+            "../test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/rnd-sn/snapshot.xml"
         );
         let snapshot = Snapshot::parse(snapshot_xml.as_ref()).unwrap();
 

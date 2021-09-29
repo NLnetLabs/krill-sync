@@ -127,8 +127,8 @@ mod tests {
             process(&config_2657).unwrap();
 
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/snapshot.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/delta.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/rnd-sn/snapshot.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/rnd-d/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
 
@@ -153,17 +153,17 @@ mod tests {
             process(&config_2658_no_delta).unwrap();
 
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2658/random123/snapshot.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2658/delta.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2658/rnd-sn/snapshot.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2658/rnd-d/delta.xml");
 
             // The following are *just* now deprecated (no longer in the new notification.xml for 2658) but kept around
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/snapshot.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/delta.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/rnd-sn/snapshot.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2657/rnd-d/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/delta.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2655/delta.xml");
 
             // The following were deprecated in 2657 and will now be removed. The empty dir for 2654 should be removed as well.
-            assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/snapshot.xml");
+            assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2656/random-2656-sn/snapshot.xml");
             assert_file_dir_removed("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654/delta.xml");
             assert_file_dir_removed(
                 "./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2654",
