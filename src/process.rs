@@ -153,7 +153,7 @@ mod tests {
             process(&config_2658_no_delta).unwrap();
 
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/notification.xml");
-            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2658/snapshot.xml");
+            assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2658/random123/snapshot.xml");
             assert_file_dir_exists("./test/process_build_update_clean/rrdp/e9be21e7-c537-4564-b742-64700978c6b4/2658/delta.xml");
 
             // The following are *just* now deprecated (no longer in the new notification.xml for 2658) but kept around

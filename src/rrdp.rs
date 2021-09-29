@@ -30,7 +30,7 @@ use crate::{
 pub struct RrdpState {
     /// The notification URI, will be used to derive the URIs for the
     /// snapshot and delta files.
-    notification_uri: Https,
+    notification_uri: NotificationUri,
 
     /// Base path to where the RRDP files should be saved
     rrdp_dir: PathBuf,
@@ -68,7 +68,8 @@ impl RrdpState {
     /// Build up a new RrdpState, i.e. without prior state.
     pub fn create(config: &Config) -> Result<Self> {
         info!("No prior state found, will build up state from latest snapshot at source");
-        let notification_uri = config.notification_uri.clone();
+        let notification_uri = NotificationUri(config.notification_uri.clone());
+
         let rrdp_dir = config.rrdp_dir.clone();
 
         let fetcher = config.fetcher();
@@ -77,13 +78,15 @@ impl RrdpState {
 
         let session_id = notification_file.session_id();
         let serial = notification_file.serial();
+        let snapshot_info = notification_file.snapshot();
 
-        let current_objects =
-            CurrentObjectMap::read_snapshot(notification_file.snapshot(), &fetcher)?;
+        let rel_path = notification_uri.relative(snapshot_info.uri())?;
+
+        let current_objects = CurrentObjectMap::read_snapshot(snapshot_info, &fetcher)?;
 
         // Recreate a new snapshot and XML to ensure that the order and formatting matches
         // snapshots derived from applying updates.
-        let snapshot = current_objects.derive_snapshot(session_id, serial);
+        let snapshot = current_objects.derive_snapshot(session_id, serial, rel_path);
 
         if !notification_file.sort_and_verify_deltas(config.rrdp_max_deltas) {
             return Err(anyhow!("Notification file contained gaps in deltas"));
@@ -215,9 +218,13 @@ impl RrdpState {
             }
         }
 
-        self.snapshot = self
-            .current_objects
-            .derive_snapshot(self.session_id, self.serial);
+        // Build a new snapshot, using the local updated current objects,
+        // preserving the URI used in the source notification file.
+        let snapshot_info = notification_file.snapshot();
+        let rel_path = self.notification_uri.relative(snapshot_info.uri())?;
+        self.snapshot =
+            self.current_objects
+                .derive_snapshot(self.session_id, self.serial, rel_path);
 
         Ok(())
     }
@@ -298,11 +305,16 @@ impl RrdpState {
         self.serial = notification_file.serial();
         self.session_id = notification_file.session_id(); // could have been reset.
 
-        self.current_objects =
-            CurrentObjectMap::read_snapshot(notification_file.snapshot(), fetcher)?;
-        self.snapshot = self
-            .current_objects
-            .derive_snapshot(self.session_id(), self.serial());
+        let snapshot_info = notification_file.snapshot();
+
+        let rel_path = self.notification_uri.relative(snapshot_info.uri())?;
+
+        self.current_objects = CurrentObjectMap::read_snapshot(snapshot_info, fetcher)?;
+
+        self.snapshot =
+            self.current_objects
+                .derive_snapshot(self.session_id(), self.serial(), rel_path);
+
         self.deltas = Self::read_deltas(notification_file.deltas(), fetcher)?;
 
         Ok(())
@@ -398,18 +410,11 @@ impl RrdpState {
     }
 
     fn make_notification_file(&self) -> Result<NotificationFile> {
-        let base_uri = self.notification_uri.parent().ok_or_else(|| {
-            anyhow!(format!(
-                "Notification URI should point to a file in a directory. Got: {}",
-                self.notification_uri
-            ))
-        })?;
+        let base_uri = self.notification_uri.base_uri()?;
 
-        let rel_path_snapshot = Self::rel_path_snapshot(self.session_id(), self.serial());
-
-        let snapshot_uri = base_uri.join(rel_path_snapshot.as_bytes())?;
-
+        let snapshot_uri = self.notification_uri.resolve(self.snapshot.rel_path())?;
         let snapshot_hash = self.snapshot.hash();
+
         let snapshot_info = SnapshotInfo::new(snapshot_uri, snapshot_hash);
 
         let mut deltas = vec![];
@@ -434,13 +439,13 @@ impl RrdpState {
     /// there would be a session id reset, then deprecate files for the old session id first, before
     /// updating the current session id.
     fn deprecate_snapshot_file(&mut self) {
-        let path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
-        self.deprecated_files.push(DeprecatedFile::new(path));
+        self.deprecated_files
+            .push(DeprecatedFile::new(self.path_snapshot()));
     }
 
     /// Writes a snapshot file.
     fn write_snapshot(&mut self) -> Result<()> {
-        let path = Self::path_snapshot(&self.rrdp_dir, self.session_id(), self.serial());
+        let path = self.path_snapshot();
         if path.exists() {
             debug!("Skip writing existing snapshot file to {:?}", path)
         } else {
@@ -483,20 +488,42 @@ impl RrdpState {
         Ok(())
     }
 
-    fn path_snapshot(base_dir: &Path, session: Uuid, serial: u64) -> PathBuf {
-        base_dir.join(Self::rel_path_snapshot(session, serial))
+    fn path_snapshot(&self) -> PathBuf {
+        self.rrdp_dir.join(self.snapshot.rel_path())
     }
 
     fn path_delta(base_dir: &Path, session: Uuid, serial: u64) -> PathBuf {
         base_dir.join(Self::rel_path_delta(session, serial))
     }
 
-    fn rel_path_snapshot(session: Uuid, serial: u64) -> String {
-        format!("{}/{}/snapshot.xml", session, serial)
-    }
-
     fn rel_path_delta(session: Uuid, serial: u64) -> String {
         format!("{}/{}/delta.xml", session, serial)
+    }
+}
+
+//------------ CurrentObjectMap ----------------------------------------------
+
+#[derive(Clone, Debug, Deserialize, Eq, Serialize, PartialEq)]
+pub struct NotificationUri(Https);
+
+impl NotificationUri {
+    pub fn relative(&self, uri: &Https) -> Result<String> {
+        uri.as_str()
+            .strip_prefix(self.base_uri()?.as_str())
+            .ok_or_else(|| anyhow!("Uri {} not relative to notification uri: {}", uri, self.0))
+            .map(|s| s.to_string())
+    }
+
+    pub fn resolve(&self, rel_path: &str) -> Result<Https> {
+        self.base_uri()?
+            .join(rel_path.as_bytes())
+            .map_err(|e| anyhow!("Could not resolve relative path {}, error: {}", rel_path, e))
+    }
+
+    fn base_uri(&self) -> Result<Https> {
+        self.0
+            .parent()
+            .ok_or_else(|| anyhow!("Illegal notification uri: {}", self.0))
     }
 }
 
@@ -513,7 +540,7 @@ impl CurrentObjectMap {
     }
 
     /// Derive a new Snapshot. Order the objects by URI.
-    fn derive_snapshot(&self, session: Uuid, serial: u64) -> SnapshotState {
+    fn derive_snapshot(&self, session: Uuid, serial: u64, rel_path: String) -> SnapshotState {
         let mut publishes: Vec<PublishElement> = self
             .0
             .values()
@@ -522,7 +549,7 @@ impl CurrentObjectMap {
         publishes.sort_by_key(|p| p.uri().to_string());
 
         let snapshot = Snapshot::new(session, serial, publishes);
-        SnapshotState::create(&snapshot)
+        SnapshotState::create(&snapshot, rel_path)
     }
 
     /// Apply an RRDP delta to self
@@ -758,13 +785,14 @@ impl CurrentObject {
 pub struct SnapshotState {
     since: Time,
     hash: rrdp::Hash,
+    rel_path: String,
 
     #[serde(skip)]
     xml: Option<Bytes>,
 }
 
 impl SnapshotState {
-    fn create(snapshot: &Snapshot) -> Self {
+    fn create(snapshot: &Snapshot, rel_path: String) -> Self {
         let mut bytes: Vec<u8> = vec![];
         snapshot.write_xml(&mut bytes).unwrap(); // cannot fail
         let xml: Bytes = bytes.into();
@@ -773,14 +801,19 @@ impl SnapshotState {
         let hash = rrdp::Hash::from_data(xml.as_ref());
 
         SnapshotState {
-            xml: Some(xml),
             since,
             hash,
+            rel_path,
+            xml: Some(xml),
         }
     }
 
     pub fn hash(&self) -> Hash {
         self.hash
+    }
+
+    pub fn rel_path(&self) -> &str {
+        self.rel_path.as_str()
     }
 
     pub fn take_xml(&mut self) -> Option<Bytes> {
@@ -862,7 +895,7 @@ mod tests {
     #[test]
     fn time_stamp_from_objects() {
         let snapshot_xml = include_bytes!(
-            "../test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/snapshot.xml"
+            "../test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/random123/snapshot.xml"
         );
         let snapshot = Snapshot::parse(snapshot_xml.as_ref()).unwrap();
 
