@@ -20,7 +20,7 @@ use rpki::{
 use crate::{config, file_ops};
 
 //------------ FetchResponse -------------------------------------------------
-enum FetchResponse {
+pub enum FetchResponse {
     Data { bytes: Bytes, etag: Option<String> },
     UnModified,
 }
@@ -55,7 +55,7 @@ pub enum FetchSource {
 impl FetchSource {
     /// Gets the data from the fetch source, and verifies that it matches
     /// the hash - if it is provided.
-    fn fetch(&self, hash: Option<Hash>, etag: Option<&String>) -> Result<FetchResponse> {
+    pub fn fetch(&self, hash: Option<Hash>, etag: Option<&String>) -> Result<FetchResponse> {
         let fetch_response = match self {
             FetchSource::Uri(uri) => {
                 let mut request_builder = Client::builder().build()?.get(uri.as_str());
@@ -282,7 +282,7 @@ impl Fetcher {
         }
     }
 
-    fn resolve_source(&self, uri: &uri::Https) -> Result<FetchSource> {
+    pub fn resolve_source(&self, uri: &uri::Https) -> Result<FetchSource> {
         match &self.fetch_map {
             None => Ok(FetchSource::Uri(uri.clone())),
             Some(map) => map.source(uri),

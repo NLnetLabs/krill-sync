@@ -28,15 +28,11 @@ use crate::{
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RrdpState {
-    /// The notification URI, will be used to derive the URIs for the
-    /// snapshot and delta files.
-    notification_uri: NotificationUri,
+    /// The notification source information
+    notification_source: NotificationSource,
 
-    /// Base path to where the RRDP files should be saved
-    rrdp_dir: PathBuf,
-
-    /// The last seen notification file etag (if seen and if set in response)
-    etag: Option<String>,
+    /// Maps notification, and other URIs to disk and vice versa
+    mappings: SourceMappings,
 
     /// The identifier of the current session of the server.
     ///
@@ -68,19 +64,23 @@ impl RrdpState {
     /// Build up a new RrdpState, i.e. without prior state.
     pub fn create(config: &Config) -> Result<Self> {
         info!("No prior state found, will build up state from latest snapshot at source");
-        let notification_uri = NotificationUri(config.notification_uri.clone());
-
-        let rrdp_dir = config.rrdp_dir.clone();
 
         let fetcher = config.fetcher();
 
-        let (mut notification_file, etag) = fetcher.read_notification_file(None)?.content()?;
+        let mut notification_source = NotificationSource::build(config.notification_uri.clone())?;
+
+        let mut notification_file = notification_source
+            .fetch(&fetcher)?
+            .ok_or_else(|| anyhow!("No notification file found"))?;
+
+        let mappings =
+            SourceMappings::build(config.notification_uri.clone(), config.rrdp_dir.clone())?;
 
         let session_id = notification_file.session_id();
         let serial = notification_file.serial();
         let snapshot_info = notification_file.snapshot();
 
-        let rel_path = notification_uri.relative(snapshot_info.uri())?;
+        let rel_path = mappings.relative(snapshot_info.uri())?;
 
         let current_objects = CurrentObjectMap::read_snapshot(snapshot_info, &fetcher)?;
 
@@ -92,14 +92,13 @@ impl RrdpState {
             return Err(anyhow!("Notification file contained gaps in deltas"));
         }
 
-        let deltas = Self::read_deltas(&notification_uri, notification_file.deltas(), &fetcher)?;
+        let deltas = Self::read_deltas(&mappings, notification_file.deltas(), &fetcher)?;
 
         info!("Done building up state");
 
         Ok(RrdpState {
-            notification_uri,
-            rrdp_dir,
-            etag,
+            notification_source,
+            mappings,
             session_id,
             serial,
             current_objects,
@@ -140,21 +139,12 @@ impl RrdpState {
     ///   Ok(false) if there was no update (serial and session match current)
     ///   Err       if there was an error trying to update
     pub fn update(&mut self, limit: Option<usize>, fetcher: &Fetcher) -> Result<bool> {
-        match fetcher.read_notification_file(self.etag.as_ref())? {
-            NotificationFileResponse::Unmodified => {
+        match self.notification_source.fetch(fetcher)? {
+            None => {
                 info!("Notification file was not changed, no updated needed.");
                 Ok(false)
             }
-            NotificationFileResponse::Data {
-                mut notification,
-                etag,
-            } => {
-                // If we got a response, then update our local etag. No matter whether we can actually use
-                // this response, we will have seen it, so there is no point in trying again later.
-                // If the etag is now NONE, but it was set before then we should also forget it locally. This
-                // is a bit strange but perhaps the server just dropped support for etag?
-                self.etag = etag;
-
+            Some(mut notification) => {
                 // Now see what we can do with the new notification file.
                 if !notification.sort_and_verify_deltas(limit) {
                     Err(anyhow!("Notification file contained gaps in deltas"))
@@ -221,7 +211,7 @@ impl RrdpState {
         // Build a new snapshot, using the local updated current objects,
         // preserving the URI used in the source notification file.
         let snapshot_info = notification_file.snapshot();
-        let rel_path = self.notification_uri.relative(snapshot_info.uri())?;
+        let rel_path = self.mappings.relative(snapshot_info.uri())?;
         self.snapshot =
             self.current_objects
                 .derive_snapshot(self.session_id, self.serial, rel_path);
@@ -264,7 +254,7 @@ impl RrdpState {
             )))
         } else {
             info!("Applying delta for serial: {}", delta_info.serial());
-            let rel_path = self.notification_uri.relative(delta_info.uri())?;
+            let rel_path = self.mappings.relative(delta_info.uri())?;
             let delta = fetcher.read_delta_file(delta_info)?;
             let delta_state = DeltaState::create(&delta, rel_path);
             self.current_objects.apply_delta(delta)?;
@@ -279,7 +269,7 @@ impl RrdpState {
     /// derived from a snapshot, but all deltas on notification file need
     /// to be downloaded so that they may be made available.
     fn read_deltas(
-        notification_uri: &NotificationUri,
+        mappings: &SourceMappings,
         deltas: &[DeltaInfo],
         fetcher: &Fetcher,
     ) -> Result<VecDeque<DeltaState>> {
@@ -287,7 +277,7 @@ impl RrdpState {
 
         for delta_info in deltas {
             debug!("Read delta from {}", delta_info.uri());
-            let rel_path = notification_uri.relative(delta_info.uri())?;
+            let rel_path = mappings.relative(delta_info.uri())?;
             let delta = fetcher.read_delta_file(delta_info)?;
             let delta = DeltaState::create(&delta, rel_path);
             res.push_front(delta);
@@ -310,7 +300,7 @@ impl RrdpState {
 
         let snapshot_info = notification_file.snapshot();
 
-        let rel_path = self.notification_uri.relative(snapshot_info.uri())?;
+        let rel_path = self.mappings.relative(snapshot_info.uri())?;
 
         self.current_objects = CurrentObjectMap::read_snapshot(snapshot_info, fetcher)?;
 
@@ -318,8 +308,7 @@ impl RrdpState {
             self.current_objects
                 .derive_snapshot(self.session_id(), self.serial(), rel_path);
 
-        self.deltas =
-            Self::read_deltas(&self.notification_uri, notification_file.deltas(), fetcher)?;
+        self.deltas = Self::read_deltas(&self.mappings, notification_file.deltas(), fetcher)?;
 
         Ok(())
     }
@@ -390,11 +379,11 @@ impl RrdpState {
     /// temporary file and then rename it to avoid serving partially
     /// written files.
     pub fn write_notification(&self) -> Result<()> {
-        let notification_file_filename_final = self.notification_uri.notify_filename()?;
-        let notification_file_filename_tmp = format!("{}.tmp", notification_file_filename_final);
+        let notification_file_filename_final = self.notification_source.name();
+        let notification_file_filename_tmp = self.notification_source.tmp_name();
 
-        let path_final = self.rrdp_dir.join(notification_file_filename_final);
-        let path_tmp = self.rrdp_dir.join(notification_file_filename_tmp);
+        let path_final = self.mappings.path(notification_file_filename_final);
+        let path_tmp = self.mappings.path(&notification_file_filename_tmp);
 
         info!("Updating notification file at {:?}", path_final);
 
@@ -417,9 +406,7 @@ impl RrdpState {
     }
 
     fn make_notification_file(&self) -> Result<NotificationFile> {
-        let base_uri = self.notification_uri.base_uri()?;
-
-        let snapshot_uri = self.notification_uri.resolve(self.snapshot.rel_path())?;
+        let snapshot_uri = self.mappings.uri(self.snapshot.rel_path())?;
         let snapshot_hash = self.snapshot.hash();
 
         let snapshot_info = SnapshotInfo::new(snapshot_uri, snapshot_hash);
@@ -429,7 +416,7 @@ impl RrdpState {
             let serial = delta.serial();
             let hash = delta.hash();
             let rel_path_delta = Self::rel_path_delta(self.session_id(), serial);
-            let uri = base_uri.join(rel_path_delta.as_bytes())?;
+            let uri = self.mappings.uri(&rel_path_delta)?;
 
             deltas.push(DeltaInfo::new(serial, uri, hash));
         }
@@ -458,7 +445,7 @@ impl RrdpState {
         } else {
             info!("Writing snapshot file to {:?}", path);
             let xml = self.snapshot.xml();
-            file_ops::write_buf(&path, &xml).with_context(|| "Could not write snapshot XML")?;
+            file_ops::write_buf(&path, xml).with_context(|| "Could not write snapshot XML")?;
         }
 
         Ok(())
@@ -481,7 +468,7 @@ impl RrdpState {
             } else {
                 info!("Writing delta file to {:?}", path);
                 let xml = delta.xml();
-                file_ops::write_buf(&path, &xml)
+                file_ops::write_buf(&path, xml)
                     .with_context(|| format!("Could not write delta XML to {:?}", path))?;
             }
         }
@@ -490,11 +477,11 @@ impl RrdpState {
     }
 
     fn path_snapshot(&self) -> PathBuf {
-        self.rrdp_dir.join(self.snapshot.rel_path())
+        self.mappings.path(self.snapshot.rel_path())
     }
 
     fn path_delta(&self, delta: &DeltaState) -> PathBuf {
-        self.rrdp_dir.join(delta.rel_path())
+        self.mappings.path(delta.rel_path())
     }
 
     fn rel_path_delta(session: Uuid, serial: u64) -> String {
@@ -502,45 +489,96 @@ impl RrdpState {
     }
 }
 
-//------------ CurrentObjectMap ----------------------------------------------
+//------------ SourceMappings ------------------------------------------------
+//------------ SourceMappings ------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize, Eq, Serialize, PartialEq)]
-pub struct NotificationUri(Https);
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NotificationSource {
+    uri: Https,
+    name: String,
+    etag: Option<String>,
+}
 
-impl NotificationUri {
+impl NotificationSource {
+    pub fn build(uri: Https) -> Result<Self> {
+        let parent = uri
+            .parent()
+            .ok_or_else(|| anyhow!("Illegal notify uri: {}", uri))?;
+
+        let name = uri
+            .as_str()
+            .strip_prefix(parent.as_str())
+            .unwrap() // safe because we just derived the parent
+            .to_string();
+
+        Ok(NotificationSource {
+            uri,
+            name,
+            etag: None,
+        })
+    }
+
+    pub fn fetch(&mut self, fetcher: &Fetcher) -> Result<Option<NotificationFile>> {
+        match fetcher.read_notification_file(self.etag.as_ref())? {
+            NotificationFileResponse::Data { notification, etag } => {
+                self.etag = etag;
+                Ok(Some(notification))
+            }
+            NotificationFileResponse::Unmodified => Ok(None),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn tmp_name(&self) -> String {
+        format!("{}.tmp", self.name)
+    }
+}
+
+//------------ SourceMappings ------------------------------------------------
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceMappings {
+    /// The parent directory of the notification URI is used as the base
+    /// URI for all other URIs. I.e. we insist that notification.xml file,
+    /// or whatever it's called, lives in the base directory of the RRDP
+    /// source and snapshots and deltas are stored under the same space.
+    base_uri: Https,
+
+    /// Base path to where the RRDP files should be saved
+    rrdp_dir: PathBuf,
+}
+
+impl SourceMappings {
+    pub fn build(notification_uri: Https, rrdp_dir: PathBuf) -> Result<Self> {
+        let base_uri = notification_uri
+            .parent()
+            .ok_or_else(|| anyhow!("Illegal notification uri: {}", notification_uri))?;
+
+        Ok(SourceMappings { base_uri, rrdp_dir })
+    }
+
+    /// Derives the relative path of the given URI versus the base URI.
+    /// Returns an error in case the URI is not relative to the base URI.
     pub fn relative(&self, uri: &Https) -> Result<String> {
         uri.as_str()
-            .strip_prefix(self.base_uri()?.as_str())
-            .ok_or_else(|| anyhow!("Uri {} not relative to notification uri: {}", uri, self.0))
+            .strip_prefix(self.base_uri.as_str())
+            .ok_or_else(|| anyhow!("Uri {} not relative to base uri: {}", uri, self.base_uri))
             .map(|s| s.to_string())
     }
 
-    pub fn resolve(&self, rel_path: &str) -> Result<Https> {
-        self.base_uri()?
+    /// Resolve the given relative path under the base URI.
+    pub fn uri(&self, rel_path: &str) -> Result<Https> {
+        self.base_uri
             .join(rel_path.as_bytes())
             .map_err(|e| anyhow!("Could not resolve relative path {}, error: {}", rel_path, e))
     }
 
-    fn base_uri(&self) -> Result<Https> {
-        self.0
-            .parent()
-            .ok_or_else(|| anyhow!("Illegal notification uri: {}", self.0))
-    }
-
-    fn notify_filename(&self) -> Result<String> {
-        let uri = self.0.as_str();
-        let idx = uri
-            .rfind('/')
-            .ok_or_else(|| anyhow!("Illegal notification uri: {}", self.0))?;
-
-        if idx + 1 == uri.len() {
-            Err(anyhow!(
-                "Illegal notification uri, ends with a slash: {}",
-                self.0
-            ))
-        } else {
-            Ok(self.0.as_str()[idx + 1..].to_string())
-        }
+    /// Resolve the given relative path under the base RRDP directory.
+    pub fn path(&self, rel_path: &str) -> PathBuf {
+        self.rrdp_dir.join(rel_path)
     }
 }
 
