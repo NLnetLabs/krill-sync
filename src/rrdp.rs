@@ -476,7 +476,7 @@ impl RrdpState {
         Ok(())
     }
 
-    fn path_snapshot(&self) -> PathBuf {
+    pub fn path_snapshot(&self) -> PathBuf {
         self.mappings.path(self.snapshot.rel_path())
     }
 

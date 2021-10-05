@@ -1,16 +1,20 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::{self, BufReader},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 
-use filetime::{set_file_mtime, FileTime};
-use log::{info, trace};
+use log::info;
+use rpki::rrdp::ProcessSnapshot;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     config::{self, Config},
     file_ops,
-    rrdp::{CurrentObject, RrdpState},
+    rrdp::RrdpState,
     util::{self, Time},
 };
 
@@ -27,11 +31,11 @@ pub fn update_from_rrdp_state(
     };
 
     if changed {
-        write_rsync_content(
-            &new_revision.path(config),
-            config.rsync_multiple_auth,
-            rrdp_state.elements(),
-        )?;
+        let mut writer = RsyncFromSnapshotWriter {
+            out_path: new_revision.path(config),
+            include_host_and_module: config.rsync_multiple_auth,
+        };
+        writer.from_snapshot_path(&rrdp_state.path_snapshot())?;
 
         if config.rsync_dir_use_symlinks() {
             symlink_current_to_new_revision_dir(&new_revision, config)?;
@@ -126,35 +130,6 @@ fn rename_new_revision_dir_to_current(
             current_path
         )
     })?;
-
-    Ok(())
-}
-
-fn write_rsync_content<'a>(
-    out_path: &Path,
-    include_host_and_module: bool,
-    elements: impl Iterator<Item = &'a CurrentObject>,
-) -> Result<()> {
-    info!("Writing rsync repository to: {:?}", out_path);
-    for element in elements {
-        let path = if include_host_and_module {
-            let uri = element.uri();
-            out_path.join(format!(
-                "{}/{}/{}",
-                uri.authority(),
-                uri.module_name(),
-                uri.path()
-            ))
-        } else {
-            out_path.join(element.uri().path())
-        };
-
-        trace!("Writing rsync file {:?}", &path);
-        file_ops::write_buf(&path, element.data())?;
-
-        let mtime = FileTime::from_unix_time(element.since().timestamp(), 0);
-        set_file_mtime(&path, mtime)?;
-    }
 
     Ok(())
 }
@@ -264,4 +239,54 @@ impl RsyncRevision {
 struct DeprecatedRsyncRevision {
     since: Time,
     revision: RsyncRevision,
+}
+
+struct RsyncFromSnapshotWriter {
+    out_path: PathBuf,
+    include_host_and_module: bool,
+}
+
+impl RsyncFromSnapshotWriter {
+    fn from_snapshot_path(&mut self, snapshot: &Path) -> Result<()> {
+        let source_file = File::open(snapshot)?;
+        let buf_reader = BufReader::new(source_file);
+        self.process(buf_reader)?;
+        Ok(())
+    }
+}
+
+impl ProcessSnapshot for RsyncFromSnapshotWriter {
+    type Err = anyhow::Error;
+
+    fn meta(&mut self, _session_id: Uuid, _serial: u64) -> Result<()> {
+        Ok(()) // nothing to do
+    }
+
+    fn publish(
+        &mut self,
+        uri: rpki::uri::Rsync,
+        data: &mut rpki::rrdp::ObjectReader,
+    ) -> Result<()> {
+        let path = if self.include_host_and_module {
+            self.out_path.join(format!(
+                "{}/{}/{}",
+                uri.authority(),
+                uri.module_name(),
+                uri.path()
+            ))
+        } else {
+            self.out_path.join(uri.path())
+        };
+
+        let mut file = file_ops::create_file(&path)?;
+        io::copy(data, &mut file).with_context(|| {
+            format!(
+                "Could not copy element for uri: {}, to path: {}",
+                uri,
+                path.to_string_lossy()
+            )
+        })?;
+
+        Ok(())
+    }
 }

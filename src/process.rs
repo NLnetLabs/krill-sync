@@ -21,33 +21,6 @@ pub fn process(config: &Config) -> Result<()> {
         RrdpState::create(config)?
     };
 
-    // ===================================================================
-    // If enabled, use the remote RRDP data to create a local copy of the
-    // repository in the format needed to serve it as an Rsync repository.
-    // ===================================================================
-
-    // Note that we do NOT fetch from a remote Rsync repository using the Rsync
-    // protocol. Rather we fetch from a remote RRDP repository and represent it
-    // locally in a form suitable for serving via an Rsync server daemon. This
-    // is both to ensure consistency (the RRDP notification XML is a safe
-    // starting point for fetching everything it refers to) and to avoid having
-    // to use an external rsync client.
-    //
-    // We update the local Rsync repository representation before updating the
-    // RRDP notification file because the RRDP XML files contain "uri" attribute
-    // values that refer to the locations within the Rsync repository.
-    //
-    // If there was an existing current rsync directory then it will be kept
-    // around for existing client. On unix systems we will use a symlink to point
-    // to the current directory so that new client will get the updated content.
-    // On non-unix systems we will rename directories in quick succession.
-    //
-    // We will also clean out old rsync directories if they had been deprecated
-    // for more than the 'cleanup_after' time.
-    if config.rsync_enabled() {
-        rsync::update_from_rrdp_state(&rrdp_state, changed, config)?;
-    }
-
     // ============================
     // Update the local RRDP files.
     // ============================
@@ -61,6 +34,30 @@ pub fn process(config: &Config) -> Result<()> {
     // Clean up any RRDP files and empty parent directories if they had been
     // deprecated for more than the configured 'cleanup_after' time.
     rrdp_state.clean(config)?;
+
+    // =========================================================================
+    // If enabled, use the latest local RRDP snapshot to create a local copy
+    // of the repository in the format needed to serve it as an Rsync repository.
+    // ==========================================================================
+
+    // Note that we do NOT fetch from a remote Rsync repository using the Rsync
+    // protocol. Rather we fetch from a remote RRDP repository and represent it
+    // locally in a form suitable for serving via an Rsync server daemon. This
+    // is both to ensure consistency (the RRDP notification XML is a safe
+    // starting point for fetching everything it refers to) and to avoid having
+    // to use an external rsync client.
+    //
+    // If there was an existing current rsync directory then it will be kept
+    // around for existing clients. On unix systems we will use a symlink to point
+    // to the current directory so that new client will get the updated content.
+    // On non-unix systems we will rename directories in quick succession.
+    //
+    // We will also clean out old rsync directories if they had been deprecated
+    // for more than the 'cleanup_after' time, even if there was no new data to
+    // write (i.e. change == false).
+    if config.rsync_enabled() {
+        rsync::update_from_rrdp_state(&rrdp_state, changed, config)?;
+    }
 
     // ==============
     // Persist state.
