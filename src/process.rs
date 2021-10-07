@@ -250,6 +250,21 @@ mod tests {
                 &dir,
                 "rsync/session_e9be21e7-c537-4564-b742-64700978c6b4_serial_2656",
             );
+
+            // Try a session reset
+            let config_session_reset = create_test_config(
+                &dir,
+                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notifyerthingy.xml"),
+                "./test-resources/rrdp-rev2-session-reset/",
+                rsync_dir_force_moves,
+            );
+            process(&config_session_reset).unwrap();
+            if !rsync_dir_force_moves {
+                assert_file_dir_exists(
+                    &dir,
+                    "rsync/session_bf64ea72-ebb8-462f-99fb-8cd06f418565_serial_2",
+                );
+            }
         })
     }
 
