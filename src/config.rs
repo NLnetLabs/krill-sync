@@ -171,6 +171,7 @@ pub fn create_test_config(
     work_dir: &Path,
     notification_uri: Https,
     source_uri_base: &str,
+    rsync_dir_force_moves: bool,
 ) -> Config {
     let source_uri_base = FetchSource::File(PathBuf::from(source_uri_base));
 
@@ -186,7 +187,7 @@ pub fn create_test_config(
         rrdp_notify_delay: 0,
         rrdp_max_deltas: Some(3),
         rsync_dir,
-        rsync_dir_force_moves: false,
+        rsync_dir_force_moves,
         rsync_disable: false,
         rsync_include_host: false,
         cleanup_after: 2,
