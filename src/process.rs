@@ -9,62 +9,59 @@ pub fn process(config: &Config) -> Result<()> {
 
     // ===================================================================
     // Get the current RRDP state:
-    //  - recover and update if prior state exists; or
+    //  - recover if prior state exists; or
     //  - create a new state based on config
     // ===================================================================
-    let mut changed = true;
     let mut rrdp_state = if config.rrdp_state_path().exists() {
-        let mut recovered = RrdpState::recover(&config.rrdp_state_path())?;
-        changed = recovered.update(config.rrdp_max_deltas, &config.fetcher())?;
-        recovered
+        RrdpState::recover(&config.rrdp_state_path())?
     } else {
         RrdpState::create(config)?
     };
 
-    // ============================
-    // Update the local RRDP files.
-    // ============================
-
-    // This will write the new snapshot and and any missing delta files to disk
-    // first, and then updates the notification file after a configurable delay.
-    if changed {
-        rrdp_state.write_rrdp_files(config.rrdp_notify_delay)?;
-    }
+    // ===================================================================
+    // Update the RRDP state, if there are any changes in the source:
+    //  - remember if there was a change for writing a new rsync folder
+    // ===================================================================
+    let changed = rrdp_state.update(config.rrdp_max_deltas, &config.fetcher())?;
 
     // Clean up any RRDP files and empty parent directories if they had been
     // deprecated for more than the configured 'cleanup_after' time.
     rrdp_state.clean(config)?;
 
-    // =========================================================================
-    // If enabled, use the latest local RRDP snapshot to create a local copy
-    // of the repository in the format needed to serve it as an Rsync repository.
-    // ==========================================================================
+    // ===================================================================
+    // If enabled, use the latest local RRDP snapshot to create a local
+    // copy of the repository in the format needed to serve it as an Rsync
+    // repository.
+    // ===================================================================
 
-    // Note that we do NOT fetch from a remote Rsync repository using the Rsync
-    // protocol. Rather we fetch from a remote RRDP repository and represent it
-    // locally in a form suitable for serving via an Rsync server daemon. This
-    // is both to ensure consistency (the RRDP notification XML is a safe
-    // starting point for fetching everything it refers to) and to avoid having
-    // to use an external rsync client.
+    // Note that we do NOT fetch from a remote Rsync repository using the
+    // Rsync protocol. Rather we fetch from a remote RRDP repository and
+    // represent it locally in a form suitable for serving via an Rsync
+    // server daemon. This is both to ensure consistency (the RRDP
+    // notification XML is a safe starting point for fetching everything
+    // it refers to) and to avoid having to use an external rsync client.
     //
-    // If there was an existing current rsync directory then it will be kept
-    // around for existing clients. On unix systems we will use a symlink to point
-    // to the current directory so that new client will get the updated content.
-    // On non-unix systems we will rename directories in quick succession.
+    // If there was an existing current rsync directory then it will be
+    // kept around for existing clients. On unix systems we will use a
+    // symlink to point to the current directory so that new client will
+    // get the updated content.  On non-unix systems we will rename
+    // directories in quick succession.
     //
-    // We will also clean out old rsync directories if they had been deprecated
-    // for more than the 'cleanup_after' time, even if there was no new data to
-    // write (i.e. change == false).
+    // We will also clean out old rsync directories if they had been
+    // deprecated for more than the 'cleanup_after' time, even if there
+    // was no new data to write (i.e. change == false).
     if config.rsync_enabled() {
         rsync::update_from_rrdp_state(&rrdp_state, changed, config)?;
     }
 
-    // ==============
-    // Persist state.
-    // ==============
+    // ===================================================================
+    // Nothing failed!! Update the notification file
+    // ===================================================================
+    rrdp_state.write_notification()?;
 
-    // This allows future runs to pick up deltas rather than snapshots, and
-    // will allow us to know which files can be safely cleaned up.
+    // ===================================================================
+    // Persist state
+    // ===================================================================
     rrdp_state.persist(&config.rrdp_state_path())?;
 
     Ok(())

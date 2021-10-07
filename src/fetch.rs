@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Debug},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
 };
 
@@ -13,8 +13,8 @@ use reqwest::{
 };
 
 use rpki::{
-    rrdp::{Delta, DeltaInfo, Hash, NotificationFile, Snapshot, SnapshotInfo},
-    uri,
+    rrdp::{Hash, NotificationFile},
+    uri::{self, Https},
 };
 
 use crate::{config, file_ops};
@@ -22,6 +22,7 @@ use crate::{config, file_ops};
 //------------ FetchResponse -------------------------------------------------
 pub enum FetchResponse {
     Data { bytes: Bytes, etag: Option<String> },
+    Saved,
     UnModified,
 }
 
@@ -53,9 +54,24 @@ pub enum FetchSource {
 }
 
 impl FetchSource {
-    /// Gets the data from the fetch source, and verifies that it matches
-    /// the hash - if it is provided.
-    pub fn fetch(&self, hash: Option<Hash>, etag: Option<&String>) -> Result<FetchResponse> {
+    /// Gets the data from the fetch source.
+    /// - checks the hash if it is provided
+    /// - uses the etag to avoid expensive http fetching if provided
+    /// - if the target_file is provided then the data will be copied there
+    ///   rather than be returned.
+    pub fn fetch(
+        &self,
+        hash: Option<Hash>,
+        etag: Option<&String>,
+        target_file: Option<&Path>,
+    ) -> Result<FetchResponse> {
+        // Fetch the data into memory, even if we mean to write it to disk.
+        // We could modify this to save straight to disk instead, but then
+        // we would need to build up the hash as we are writing the file
+        // for later checking, and then we should remove the file again if
+        // the hash did not match.
+        // Since the source files are trusted there should be no big deal
+        // in keeping them temporarily in memory.
         let fetch_response = match self {
             FetchSource::Uri(uri) => {
                 let mut request_builder = Client::builder().build()?.get(uri.as_str());
@@ -109,6 +125,7 @@ impl FetchSource {
             }
         }?;
 
+        // Verify the hash if provided
         if let Some(hash) = hash {
             if let FetchResponse::Data { bytes, .. } = &fetch_response {
                 if !hash.matches(bytes.as_ref()) {
@@ -121,15 +138,15 @@ impl FetchSource {
             }
         }
 
-        Ok(fetch_response)
-    }
-
-    fn fetch_no_etag(&self, hash: Option<Hash>) -> Result<Bytes> {
-        match self.fetch(hash, None)? {
-            FetchResponse::Data { bytes, .. } => Ok(bytes),
-            FetchResponse::UnModified => {
-                Err(anyhow!("Got unmodified response to fetch without ETag?!"))
+        if let Some(target_file) = target_file {
+            if let FetchResponse::Data { bytes, .. } = &fetch_response {
+                file_ops::write_buf(target_file, bytes)?;
+                Ok(FetchResponse::Saved)
+            } else {
+                Ok(fetch_response)
             }
+        } else {
+            Ok(fetch_response)
         }
     }
 
@@ -233,53 +250,28 @@ impl Fetcher {
         etag: Option<&String>,
     ) -> Result<NotificationFileResponse> {
         let snapshot_source = self.resolve_source(&self.notification_uri)?;
-        let resp = match snapshot_source.fetch(None, etag)? {
+        let resp = match snapshot_source.fetch(None, etag, None)? {
             FetchResponse::Data { bytes, etag } => {
                 let notification = NotificationFile::parse(bytes.as_ref())
                     .with_context(|| "Failed to parse notification file")?;
                 NotificationFileResponse::Data { notification, etag }
             }
             FetchResponse::UnModified => NotificationFileResponse::Unmodified,
+            FetchResponse::Saved => {
+                unreachable!("For the notification file we get data instead of saving")
+            }
         };
 
         Ok(resp)
     }
 
-    pub fn read_snapshot_file(&self, info: &SnapshotInfo) -> Result<Snapshot> {
-        let snapshot_source = self.resolve_source(info.uri())?;
-        let bytes = snapshot_source.fetch_no_etag(Some(info.hash()))?;
+    pub fn retrieve_file(&self, uri: &Https, hash: Hash, target: &Path) -> Result<()> {
+        let source = self.resolve_source(uri)?;
+        source
+            .fetch(Some(hash), None, Some(target))
+            .map_err(|e| anyhow!("Could not read snapshot: {}", e))?;
 
-        Snapshot::parse(bytes.as_ref()).with_context(|| "Failed to parse snapshot file")
-    }
-
-    /// Retrieves a delta file, resolving the given URI against the local fetch map
-    /// if applicable. Will insist that the Hash matches the content of the delta file
-    /// and that the delta is applicable to the given version.
-    pub fn read_delta_file(&self, delta_info: &DeltaInfo) -> Result<Delta> {
-        let uri = delta_info.uri();
-        let hash = delta_info.hash();
-        let serial = delta_info.serial();
-
-        let delta_source = self.resolve_source(uri)?;
-        let delta_bytes = delta_source.fetch_no_etag(Some(hash))?;
-
-        let delta = Delta::parse(delta_bytes.as_ref()).with_context(|| {
-            format!(
-                "Failed to parse delta file for uri: {}, from location: {}",
-                uri, delta_source
-            )
-        })?;
-
-        if delta.serial() != serial {
-            Err(anyhow!(format!(
-                "Delta file for uri: {} had serial {} instead of {}",
-                uri,
-                delta.serial(),
-                serial
-            )))
-        } else {
-            Ok(delta)
-        }
+        Ok(())
     }
 
     pub fn resolve_source(&self, uri: &uri::Https) -> Result<FetchSource> {
