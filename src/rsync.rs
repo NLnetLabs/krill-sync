@@ -45,7 +45,7 @@ pub fn update_from_rrdp_state(
     if changed {
         let mut writer = RsyncFromSnapshotWriter {
             out_path: new_revision.path(config),
-            include_host_and_module: config.rsync_multiple_auth,
+            include_host_and_module: config.rsync_include_host,
         };
         writer.from_snapshot_path(&snapshot_path)?;
 
