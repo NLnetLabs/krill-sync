@@ -6,6 +6,40 @@ Server to make a consistent local copy of that data.
 This is intended to facilitate a redundant set up where one or more public https
 and rsync servers are used to make the RPKI repository content available.
 
+## Changelog
+
+24-11-2021 v0.2.0-rc2
+
+This RC addresses the following issues:
+- Preserve RRDP paths (#47)
+- Preserve file names (#48)
+- Preserve source files (#50)
+
+23-06-2021 v0.2.0-rc1
+
+The code has had a massive overhaul since version 0.1.x. It has been simplified and
+has much better test coverage. Functionality should be compatible to the known requirements
+for 0.1.x - but the CLI arguments have also changed. Please have a look at the updated
+README.md file.
+
+Note: the following has been addressed in 0.2.0-rc2:
+
+Since code readability was prioritized over efficiency this new code uses more memory
+than the 0.1.x release. Furthermore it will parse snapshot and/or delta files and write
+newly generated XML to the local filesystem - the content is unchanged, but formatting
+may differ from the source.
+
+
+29-04-2021 v0.1.3
+
+In this version we added the following:
+- Allow a configurable delay before writing the RRDP notification.xml file (#5)
+- Use a symlink for the current rsync directory (#2)
+- Debian packages (#11)
+- Docker file (#9)
+
+We did not make official releases, nor dir we keep any changelogs for earlier versions.
+
 ## Installation
 
 ### Install using Pre-built Packages
