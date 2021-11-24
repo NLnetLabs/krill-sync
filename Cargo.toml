@@ -20,7 +20,7 @@ filetime = "0.2"
 fslock = "0.1.6"
 log = "0.4.11"
 reqwest = { version = "0.11.3", features = [ "blocking"] }
-rpki = { version = "0.11.1-dev", features = [ "repository", "rrdp", "serde" ], git = "https://github.com/NLnetLabs/rpki-rs.git", branch = "main" }
+rpki = { version = "0.13.1", features = [ "repository", "rrdp", "serde" ] }
 serde = { version = "1.0.116", features =  ["derive"] } 
 serde_json = "1.0.57"
 structopt = { version = "0.3.18", default-features = false }
