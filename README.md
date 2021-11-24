@@ -18,6 +18,7 @@ your `/etc/apt/sources.list` or `/etc/apt/sources.list.d/`
 ```bash
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ stretch main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ buster main
+deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ bullseye main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/ubuntu/ xenial main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/ubuntu/ bionic main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/ubuntu/ focal main
