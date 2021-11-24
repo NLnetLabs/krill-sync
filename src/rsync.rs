@@ -1,16 +1,24 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::{BufReader, Read},
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use filetime::{set_file_mtime, FileTime};
-use log::{info, trace};
+use log::{info, warn};
+use rpki::{
+    repository::{sigobj::SignedObject, Cert, Crl, Manifest, Roa},
+    rrdp::ProcessSnapshot,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     config::{self, Config},
     file_ops,
-    rrdp::{CurrentObject, RrdpState},
+    rrdp::RrdpState,
     util::{self, Time},
 };
 
@@ -19,19 +27,27 @@ pub fn update_from_rrdp_state(
     changed: bool,
     config: &Config,
 ) -> Result<()> {
+    // Check that there is a current snapshot, if not, there is no work
+    if rrdp_state.snapshot_path().is_none() {
+        return Ok(());
+    }
+
+    // We can assume now that there is a snapshot and unwrap things for it
+    let snapshot_path = rrdp_state.snapshot_path().unwrap();
+    let snapshot = rrdp_state.snapshot().unwrap();
+    let session_id = snapshot.session_id();
+    let serial = snapshot.serial();
+
     let mut rsync_state = RsyncDirState::recover(config)?;
 
-    let new_revision = RsyncRevision {
-        session_id: rrdp_state.session_id(),
-        serial: rrdp_state.serial(),
-    };
+    let new_revision = RsyncRevision { session_id, serial };
 
     if changed {
-        write_rsync_content(
-            &new_revision.path(config),
-            config.rsync_multiple_auth,
-            rrdp_state.elements(),
-        )?;
+        let mut writer = RsyncFromSnapshotWriter {
+            out_path: new_revision.path(config),
+            include_host_and_module: config.rsync_include_host,
+        };
+        writer.from_snapshot_path(&snapshot_path)?;
 
         if config.rsync_dir_use_symlinks() {
             symlink_current_to_new_revision_dir(&new_revision, config)?;
@@ -126,35 +142,6 @@ fn rename_new_revision_dir_to_current(
             current_path
         )
     })?;
-
-    Ok(())
-}
-
-fn write_rsync_content<'a>(
-    out_path: &Path,
-    include_host_and_module: bool,
-    elements: impl Iterator<Item = &'a CurrentObject>,
-) -> Result<()> {
-    info!("Writing rsync repository to: {:?}", out_path);
-    for element in elements {
-        let path = if include_host_and_module {
-            let uri = element.uri();
-            out_path.join(format!(
-                "{}/{}/{}",
-                uri.authority(),
-                uri.module_name(),
-                uri.path()
-            ))
-        } else {
-            out_path.join(element.uri().path())
-        };
-
-        trace!("Writing rsync file {:?}", &path);
-        file_ops::write_buf(&path, element.data())?;
-
-        let mtime = FileTime::from_unix_time(element.since().timestamp(), 0);
-        set_file_mtime(&path, mtime)?;
-    }
 
     Ok(())
 }
@@ -264,4 +251,152 @@ impl RsyncRevision {
 struct DeprecatedRsyncRevision {
     since: Time,
     revision: RsyncRevision,
+}
+
+struct RsyncFromSnapshotWriter {
+    out_path: PathBuf,
+    include_host_and_module: bool,
+}
+
+impl RsyncFromSnapshotWriter {
+    fn from_snapshot_path(&mut self, snapshot: &Path) -> Result<()> {
+        let source_file = File::open(snapshot)?;
+        let buf_reader = BufReader::new(source_file);
+        self.process(buf_reader)?;
+        Ok(())
+    }
+}
+
+impl ProcessSnapshot for RsyncFromSnapshotWriter {
+    type Err = anyhow::Error;
+
+    fn meta(&mut self, _session_id: Uuid, _serial: u64) -> Result<()> {
+        Ok(()) // nothing to do
+    }
+
+    fn publish(
+        &mut self,
+        uri: rpki::uri::Rsync,
+        data: &mut rpki::rrdp::ObjectReader,
+    ) -> Result<()> {
+        let path = if self.include_host_and_module {
+            self.out_path.join(format!(
+                "{}/{}/{}",
+                uri.authority(),
+                uri.module_name(),
+                uri.path()
+            ))
+        } else {
+            self.out_path.join(uri.path())
+        };
+
+        // Read the bytes into memory, we will need to parse this in order
+        // to fix the mtime of the file. In other words.. we _could_ copy
+        // the bytes from the reader into a file on disk, but then we would
+        // have to re-read them to parse them anyway.
+        let mut bytes: Vec<u8> = vec![];
+        data.read_to_end(&mut bytes)?;
+
+        file_ops::write_buf(&path, &bytes).with_context(|| {
+            format!(
+                "Could not copy element for uri: {}, to path: {}",
+                uri,
+                path.to_string_lossy()
+            )
+        })?;
+
+        if let Err(e) = fix_since(&path, &bytes) {
+            warn!("{}", e);
+        }
+
+        Ok(())
+    }
+}
+
+// Try to fix the modification time for a repository object.
+// This is needed because otherwise some clients will always think
+// there is an update.
+fn fix_since(path: &Path, data: &[u8]) -> Result<()> {
+    let path_str = path.to_string_lossy();
+    let time = if path_str.ends_with(".cer") {
+        Cert::decode(data).map(|cert| cert.validity().not_before())
+    } else if path_str.ends_with(".crl") {
+        Crl::decode(data).map(|crl| crl.this_update())
+    } else if path_str.ends_with(".mft") {
+        Manifest::decode(data, false).map(|mft| mft.this_update())
+    } else if path_str.ends_with(".roa") {
+        Roa::decode(data, false).map(|roa| roa.cert().validity().not_before())
+    } else {
+        // Try to parse this as a generic RPKI signed object
+        SignedObject::decode(data, false).map(|signed| signed.cert().validity().not_before())
+    }
+    .map_err(|_| anyhow!("Cannot parse object at: {} to derive mtime", path_str))?;
+
+    let mtime = FileTime::from_unix_time(time.timestamp(), 0);
+    set_file_mtime(&path, mtime).map_err(|e| {
+        anyhow!(
+            "Cannot modify mtime for object at: {}, error: {}",
+            path_str,
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    use filetime::FileTime;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+
+    use crate::util::test_with_dir;
+
+    use super::RsyncFromSnapshotWriter;
+
+    #[test]
+    fn write_rsync_from_snapshot() {
+        test_with_dir("write_rsync_from_snapshot", |dir| {
+            let snapshot_path = PathBuf::from("./test-resources/rrdp-rev2658/e9be21e7-c537-4564-b742-64700978c6b4/2658/rnd-sn/snapshot.xml");
+
+            let out_path = dir.join("rsync");
+            let include_host_and_module = false;
+
+            let mut writer = RsyncFromSnapshotWriter {
+                out_path,
+                include_host_and_module,
+            };
+            writer.from_snapshot_path(&snapshot_path).unwrap();
+
+            fn check_mtime(dir: &Path, path: &str, timestamp: i64) {
+                let path = dir.join(path);
+                let metadata = fs::metadata(path).unwrap();
+                let mtime = FileTime::from_last_modification_time(&metadata);
+                assert_eq!(timestamp, mtime.unix_seconds())
+            }
+
+            check_mtime(
+                &dir,
+                "rsync/ta/0/3490C0DEEA1F2E5605230550130F12D42FDE1FCD.cer",
+                1600268228,
+            );
+
+            check_mtime(
+                &dir,
+                "rsync/Acme-Corp-Intl/3/A4E953A4133AC82A46AE19C2E7CC635B51CD11D3.mft",
+                1622637098,
+            );
+
+            check_mtime(
+                &dir,
+                "rsync/Acme-Corp-Intl/5/D2E73D77B71B22FAAB38F5A62DF488283FE97932.crl",
+                1622621702,
+            );
+
+            check_mtime(&dir, "rsync/Acme-Corp-Intl/3/AS40224.roa", 1620657233);
+        });
+    }
 }

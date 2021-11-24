@@ -9,6 +9,15 @@ use bytes::Bytes;
 use log::trace;
 
 pub fn write_buf(file_path: &Path, buf: &[u8]) -> Result<()> {
+    create_file(file_path)?
+        .write_all(buf)
+        .with_context(|| format!("Cannot write file {:?}", file_path))?;
+
+    Ok(())
+}
+
+/// Create an empty file for a path
+pub fn create_file(file_path: &Path) -> Result<std::fs::File> {
     let dir = file_path
         .parent()
         .ok_or_else(|| anyhow!("Error determining parent of {:?}", file_path))?;
@@ -16,12 +25,7 @@ pub fn write_buf(file_path: &Path, buf: &[u8]) -> Result<()> {
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Cannot create dir {:?} for file {:?}", &dir, &file_path))?;
 
-    std::fs::File::create(file_path)
-        .with_context(|| format!("Cannot create file {:?}", file_path))?
-        .write_all(buf)
-        .with_context(|| format!("Cannot write file {:?}", file_path))?;
-
-    Ok(())
+    std::fs::File::create(file_path).with_context(|| format!("Cannot create file {:?}", file_path))
 }
 
 pub fn remove_file_and_empty_parent_dirs(path: &Path) -> Result<()> {
