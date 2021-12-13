@@ -8,26 +8,16 @@ and rsync servers are used to make the RPKI repository content available.
 
 ## Changelog
 
-24-11-2021 v0.2.0-rc2
-
-This RC addresses the following issues:
-- Preserve RRDP paths (#47)
-- Preserve file names (#48)
-- Preserve source files (#50)
-
-23-06-2021 v0.2.0-rc1
+13-12-2021 v0.2.0
 
 The code has had a massive overhaul since version 0.1.x. It has been simplified and
-has much better test coverage. Functionality should be compatible to the known requirements
-for 0.1.x - but the CLI arguments have also changed. Please have a look at the updated
-README.md file.
+has much better test coverage.
 
-Note: the following has been addressed in 0.2.0-rc2:
-
-Since code readability was prioritized over efficiency this new code uses more memory
-than the 0.1.x release. Furthermore it will parse snapshot and/or delta files and write
-newly generated XML to the local filesystem - the content is unchanged, but formatting
-may differ from the source.
+Functionality should be compatible to the known requirements for 0.1.x - but the
+CLI arguments have also changed. If you are looking to upgrade from 0.1.x to
+this version, please make sure that you read the updated text below and test
+things thoroughly. In case you run into any issues, do not hesitate to contact
+us or make an issue in GitHub. 
 
 
 29-04-2021 v0.1.3
