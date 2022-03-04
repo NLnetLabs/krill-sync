@@ -55,9 +55,11 @@ pub fn process(config: &Config) -> Result<()> {
     }
 
     // ===================================================================
-    // Nothing failed!! Update the notification file
+    // Update the notification file if there was any change.
     // ===================================================================
-    rrdp_state.write_notification()?;
+    if changed {
+        rrdp_state.write_notification()?;
+    }
 
     // ===================================================================
     // Persist state
