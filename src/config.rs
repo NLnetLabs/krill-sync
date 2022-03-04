@@ -22,7 +22,7 @@ pub const USER_AGENT: &str = concat!(crate_name!(), "/", crate_version!());
 
 /// The default number of seconds after we have published a snapshot or delta
 /// that it becomes, if unreferenced, eligible for cleanup.
-pub const DEFAULT_CLEANUP_SECONDS: &str = "600"; // 10 minutes
+pub const DEFAULT_CLEANUP_SECONDS: &str = "3600"; // 60 minutes
 
 /// The default location to write our process ID to so that on invocation we can
 /// check if we are already running. Cleared on boot according to the Linux FHS.
