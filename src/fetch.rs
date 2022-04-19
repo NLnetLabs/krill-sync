@@ -96,6 +96,7 @@ impl FetchSource {
             FetchSource::Uri(uri, mode) => {
                 let client = Client::builder()
                     .danger_accept_invalid_certs(mode.accept_insecure())
+                    .danger_accept_invalid_hostnames(mode.accept_insecure())
                     .build()?;
 
                 let mut request_builder = client.get(uri.as_str());
