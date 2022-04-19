@@ -47,10 +47,30 @@ impl NotificationFileResponse {
 }
 
 //------------ FetchSource ---------------------------------------------------
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FetchMode {
+    Strict,
+    Insecure, // accept self-signed or otherwise invalid HTTPs certificates.
+}
+
+impl FetchMode {
+    fn accept_insecure(&self) -> bool {
+        matches!(self, FetchMode::Insecure)
+    }
+}
+
+//------------ FetchSource ---------------------------------------------------
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FetchSource {
     File(PathBuf),
-    Uri(uri::Https),
+    Uri(uri::Https, FetchMode),
+}
+
+impl FetchSource {
+    #[cfg(test)]
+    fn strict_uri(uri: uri::Https) -> Self {
+        FetchSource::Uri(uri, FetchMode::Strict)
+    }
 }
 
 impl FetchSource {
@@ -73,8 +93,12 @@ impl FetchSource {
         // Since the source files are trusted there should be no big deal
         // in keeping them temporarily in memory.
         let fetch_response = match self {
-            FetchSource::Uri(uri) => {
-                let mut request_builder = Client::builder().build()?.get(uri.as_str());
+            FetchSource::Uri(uri, mode) => {
+                let client = Client::builder()
+                    .danger_accept_invalid_certs(mode.accept_insecure())
+                    .build()?;
+
+                let mut request_builder = client.get(uri.as_str());
                 request_builder = request_builder.header(USER_AGENT, config::USER_AGENT);
 
                 if let Some(etag) = etag {
@@ -153,10 +177,11 @@ impl FetchSource {
     fn join(&self, rel: &str) -> Result<FetchSource> {
         match self {
             FetchSource::File(base_path) => Ok(FetchSource::File(base_path.join(rel))),
-            FetchSource::Uri(base_uri) => Ok(FetchSource::Uri(
+            FetchSource::Uri(base_uri, mode) => Ok(FetchSource::Uri(
                 base_uri.join(rel.as_bytes()).with_context(|| {
                     format!("Cannot map rel path '{}' to uri: {}", rel, base_uri)
                 })?,
+                *mode,
             )),
         }
     }
@@ -164,7 +189,7 @@ impl FetchSource {
     pub fn is_dir(&self) -> bool {
         match self {
             FetchSource::File(path) => path.is_dir(),
-            FetchSource::Uri(uri) => uri.to_string().ends_with('/'),
+            FetchSource::Uri(uri, _) => uri.to_string().ends_with('/'),
         }
     }
 }
@@ -172,9 +197,10 @@ impl FetchSource {
 impl fmt::Display for FetchSource {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            FetchSource::Uri(uri) => {
-                write!(f, "{}", uri)
-            }
+            FetchSource::Uri(uri, mode) => match mode {
+                FetchMode::Strict => write!(f, "{}", uri),
+                FetchMode::Insecure => write!(f, "{} (accept insecure)", uri),
+            },
             FetchSource::File(path) => {
                 write!(f, "file: {}", path.to_string_lossy())
             }
@@ -187,7 +213,7 @@ impl FromStr for FetchSource {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(uri) = uri::Https::from_str(s) {
-            Ok(FetchSource::Uri(uri))
+            Ok(FetchSource::Uri(uri, FetchMode::Strict))
         } else {
             Ok(FetchSource::File(PathBuf::from(s)))
         }
@@ -231,13 +257,15 @@ impl FetchMap {
 pub struct Fetcher {
     notification_uri: uri::Https,
     fetch_map: Option<FetchMap>,
+    mode: FetchMode,
 }
 
 impl Fetcher {
-    pub fn new(notification_uri: uri::Https, fetch_map: Option<FetchMap>) -> Self {
+    pub fn new(notification_uri: uri::Https, fetch_map: Option<FetchMap>, mode: FetchMode) -> Self {
         Fetcher {
             notification_uri,
             fetch_map,
+            mode,
         }
     }
 
@@ -276,7 +304,7 @@ impl Fetcher {
 
     pub fn resolve_source(&self, uri: &uri::Https) -> Result<FetchSource> {
         match &self.fetch_map {
-            None => Ok(FetchSource::Uri(uri.clone())),
+            None => Ok(FetchSource::Uri(uri.clone(), self.mode)),
             Some(map) => map.source(uri),
         }
     }
@@ -306,6 +334,7 @@ mod tests {
         let fetcher = Fetcher {
             notification_uri,
             fetch_map,
+            mode: FetchMode::Strict,
         };
 
         let file_source = fetcher
@@ -326,7 +355,7 @@ mod tests {
         let base_uri = https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/");
         let notification_uri = base_uri.join(b"notification.xml").unwrap();
 
-        let base_fetch = FetchSource::Uri(https("https://other.host/rrdp/"));
+        let base_fetch = FetchSource::strict_uri(https("https://other.host/rrdp/"));
 
         let fetch_map = Some(FetchMap {
             base_uri,
@@ -336,6 +365,7 @@ mod tests {
         let fetcher = Fetcher {
             notification_uri,
             fetch_map,
+            mode: FetchMode::Strict,
         };
 
         let file_source = fetcher
@@ -344,7 +374,7 @@ mod tests {
             ))
             .unwrap();
         let expected_file_source =
-            FetchSource::Uri(https("https://other.host/rrdp/foo/bar/bla.xml"));
+            FetchSource::strict_uri(https("https://other.host/rrdp/foo/bar/bla.xml"));
         assert_eq!(file_source, expected_file_source);
 
         assert!(fetcher

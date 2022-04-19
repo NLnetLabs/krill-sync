@@ -8,7 +8,7 @@ use structopt::StructOpt;
 
 use rpki::uri::Https;
 
-use crate::fetch::{FetchMap, FetchSource, Fetcher};
+use crate::fetch::{FetchMap, FetchMode, FetchSource, Fetcher};
 
 pub const DELTA_FNAME: &str = "delta.xml";
 pub const NOTIFICATION_FNAME: &str = "notification.xml";
@@ -145,7 +145,13 @@ impl Config {
     }
 
     pub fn fetcher(&self) -> Fetcher {
-        Fetcher::new(self.notification_uri.clone(), self.fetch_map.clone())
+        let mode = if self.insecure {
+            FetchMode::Insecure
+        } else {
+            FetchMode::Strict
+        };
+
+        Fetcher::new(self.notification_uri.clone(), self.fetch_map.clone(), mode)
     }
 
     pub fn rrdp_state_path(&self) -> PathBuf {
@@ -234,6 +240,23 @@ pub fn post_configure(mut config: Config) -> Result<Config> {
             config.rsync_dir = config
                 .rsync_dir
                 .replace(DEFAULT_STATE_DIR, &config.state_dir);
+        }
+    }
+
+    // If a source_uri_base was specified together with --insecure,
+    // then we will need update the default 'strict' config. This is
+    // needed because the source map uses FromStr and is only aware
+    // of the URI / disk path.
+    if config.insecure {
+        let source_uri_base_opt = config.source_uri_base.take();
+
+        if let Some(source_uri_base) = source_uri_base_opt {
+            let source_uri_base = match source_uri_base {
+                FetchSource::File(file) => FetchSource::File(file),
+                FetchSource::Uri(uri, _) => FetchSource::Uri(uri, FetchMode::Insecure),
+            };
+
+            config.source_uri_base.replace(source_uri_base);
         }
     }
 
