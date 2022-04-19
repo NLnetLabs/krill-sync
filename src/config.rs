@@ -213,6 +213,23 @@ pub fn post_configure(mut config: Config) -> Result<Config> {
         .parent()
         .ok_or_else(|| anyhow!("Notification URI should contain a path to a file"))?;
 
+    // If a source_uri_base was specified together with --insecure,
+    // then we will need update the default 'strict' config. This is
+    // needed because the source map uses FromStr and is only aware
+    // of the URI / disk path.
+    if config.insecure {
+        let source_uri_base_opt = config.source_uri_base.take();
+
+        if let Some(source_uri_base) = source_uri_base_opt {
+            let source_uri_base = match source_uri_base {
+                FetchSource::File(file) => FetchSource::File(file),
+                FetchSource::Uri(uri, _) => FetchSource::Uri(uri, FetchMode::Insecure),
+            };
+
+            config.source_uri_base.replace(source_uri_base);
+        }
+    }
+
     if let Some(base_fetch) = config.source_uri_base.as_ref() {
         if !base_fetch.is_dir() {
             return Err(anyhow!(
@@ -240,23 +257,6 @@ pub fn post_configure(mut config: Config) -> Result<Config> {
             config.rsync_dir = config
                 .rsync_dir
                 .replace(DEFAULT_STATE_DIR, &config.state_dir);
-        }
-    }
-
-    // If a source_uri_base was specified together with --insecure,
-    // then we will need update the default 'strict' config. This is
-    // needed because the source map uses FromStr and is only aware
-    // of the URI / disk path.
-    if config.insecure {
-        let source_uri_base_opt = config.source_uri_base.take();
-
-        if let Some(source_uri_base) = source_uri_base_opt {
-            let source_uri_base = match source_uri_base {
-                FetchSource::File(file) => FetchSource::File(file),
-                FetchSource::Uri(uri, _) => FetchSource::Uri(uri, FetchMode::Insecure),
-            };
-
-            config.source_uri_base.replace(source_uri_base);
         }
     }
 
