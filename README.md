@@ -8,6 +8,13 @@ and rsync servers are used to make the RPKI repository content available.
 
 ## Changelog
 
+19-04-2022 v0.2.1
+
+This bug fix release ensures that the `--insecure` option is respected when
+fetching - so that backend servers with self-signed or expired HTTPS certificates
+can be used again. This flag was supported in 0.1.x. It was ported to 0.2.0, but
+as it turns out it was unfortunately ignored. This is now fixed. See issue #59.
+
 13-12-2021 v0.2.0
 
 The code has had a massive overhaul since version 0.1.x. It has been simplified and
