@@ -8,7 +8,7 @@ and rsync servers are used to make the RPKI repository content available.
 
 ## Changelog
 
-04-03-2021 v0.2.1
+04-03-2021 v0.2.1-rc1
 
 This release includes two fixes for issues that we found:
 - Increase cleanup-after default to 1 hour (#54)
