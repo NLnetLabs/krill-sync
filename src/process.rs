@@ -329,4 +329,28 @@ mod tests {
             assert_file_dir_exists(&dir, "rrdp/notifyerthingy.xml");
         })
     }
+
+    #[test]
+    fn handle_empty_snapshot() {
+        test_with_dir("handle_empty_snapshot", |dir| {
+            let notification_uri =
+                https("https://krill-ui-dev.do.nlnetlabs.nl/rrdp/notification.xml");
+            let source_uri_base = "./test-resources/rrdp-empty-snapshot/";
+
+            let rsync_dir_force_moves = true;
+
+            let mut config = create_test_config(
+                &dir,
+                notification_uri,
+                source_uri_base,
+                rsync_dir_force_moves,
+            );
+            config.rsync_include_host = true;
+
+            process(&config).unwrap();
+
+            assert_file_dir_exists(&dir, "rsync/current");
+            assert_file_dir_exists(&dir, "rrdp/notification.xml");
+        })
+    }
 }

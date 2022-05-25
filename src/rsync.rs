@@ -47,6 +47,7 @@ pub fn update_from_rrdp_state(
             out_path: new_revision.path(config),
             include_host_and_module: config.rsync_include_host,
         };
+        writer.create_out_path_if_missing()?;
         writer.from_snapshot_path(&snapshot_path)?;
 
         if config.rsync_dir_use_symlinks() {
@@ -259,6 +260,21 @@ struct RsyncFromSnapshotWriter {
 }
 
 impl RsyncFromSnapshotWriter {
+
+    /// Creates an empty directory for the rsync out_path. Particularly needed if the snapshot
+    /// is empty since no files (and parent dirs) would be created in that case - and we want to
+    /// see an empty directory. See issue #62.
+    fn create_out_path_if_missing(&self) -> Result<()> {
+        if !self.out_path.exists() {
+            std::fs::create_dir_all(&self.out_path)
+                .with_context(|| format!("Cannot create output directory for rsync at {:?}", &self.out_path))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Processes the given snapshot and writes any published files under the
+    /// rsync out_path directory
     fn from_snapshot_path(&mut self, snapshot: &Path) -> Result<()> {
         let source_file = File::open(snapshot)?;
         let buf_reader = BufReader::new(source_file);
