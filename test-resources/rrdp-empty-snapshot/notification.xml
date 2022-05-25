@@ -1,0 +1,3 @@
+<notification xmlns="http://www.ripe.net/rpki/rrdp" version="1" session_id="bf64ea72-ebb8-462f-99fb-8cd06f418565" serial="1">
+  <snapshot uri="https://krill-ui-dev.do.nlnetlabs.nl/rrdp/bf64ea72-ebb8-462f-99fb-8cd06f418565/1/snapshot.xml" hash="5810b44fe50a5d000b49121bf8c3db90ed0926941586450ddcc48d3ec19842a5" />
+</notification>
