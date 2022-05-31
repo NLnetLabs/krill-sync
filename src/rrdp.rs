@@ -64,14 +64,14 @@ impl RrdpState {
     pub fn recover(state_path: &Path) -> Result<Self> {
         debug!("Recovering prior state");
         let json_bytes = file_ops::read_file(state_path)
-            .with_context(|| format!("Cannot read state file at: {:?}", state_path))?;
+            .with_context(|| format!("Cannot read state file at: {}", state_path.display()))?;
 
         // Recover state with meta info from disk.
         let recovered: RrdpState =
             serde_json::from_slice(json_bytes.as_ref()).with_context(|| {
                 format!(
-                    "Cannot deserialize json for current state from {:?}",
-                    state_path
+                    "Cannot deserialize json for current state from {}",
+                    state_path.display()
                 )
             })?;
 
@@ -161,8 +161,8 @@ impl RrdpState {
             let path = &deprecated.path;
             if path.exists() {
                 info!(
-                    "Removing RRDP file: {:?}, deprecated since: {}",
-                    path, deprecated.since
+                    "Removing RRDP file: {}, deprecated since: {}",
+                    path.display(), deprecated.since
                 );
                 file_ops::remove_file_and_empty_parent_dirs(path)?;
             }
@@ -178,7 +178,7 @@ impl RrdpState {
         let json = serde_json::to_string_pretty(&self)?;
 
         file_ops::write_buf(path, json.as_bytes())
-            .with_context(|| format!("Could not save state to {:?}.", path))
+            .with_context(|| format!("Could not save state to {}.", path.display()))
     }
 
     /// Writes the notification file to disk. Will first write to a
@@ -191,7 +191,7 @@ impl RrdpState {
         let path_final = self.mappings.path(notification_file_filename_final);
         let path_tmp = self.mappings.path(&notification_file_filename_tmp);
 
-        info!("Updating notification file at {:?}", path_final);
+        info!("Updating notification file at {}", path_final.display());
 
         let notification = self.make_notification_file()?;
 
@@ -200,13 +200,13 @@ impl RrdpState {
 
         file_ops::write_buf(&path_tmp, &bytes).with_context(|| {
             format!(
-                "Could not write temporary notification file to: {:?}",
-                path_tmp
+                "Could not write temporary notification file to: {}",
+                path_tmp.display()
             )
         })?;
 
         fs::rename(&path_tmp, &path_final)
-            .with_context(|| format!("Could not rename {:?} to {:?}", path_tmp, path_final))?;
+            .with_context(|| format!("Could not rename {} to {}", path_tmp.display(), path_final.display()))?;
 
         Ok(())
     }
