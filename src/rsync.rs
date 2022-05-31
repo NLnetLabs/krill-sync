@@ -73,9 +73,9 @@ fn symlink_current_to_new_revision_dir(
     config: &Config,
 ) -> Result<()> {
     info!(
-        "Updating symlink 'current' to '{}' under rsync dir '{:?}'",
+        "Updating symlink 'current' to '{}' under rsync dir '{}'",
         new_revision.dir_name(),
-        config.rsync_dir
+        config.rsync_dir.display()
     );
     let current_path = config.rsync_dir_current();
 
@@ -83,23 +83,23 @@ fn symlink_current_to_new_revision_dir(
     if tmp_name.exists() {
         std::fs::remove_file(&tmp_name).with_context(|| {
             format!(
-                "Could not remove lingering temporary symlink for current rsync dir at '{:?}'",
-                tmp_name
+                "Could not remove lingering temporary symlink for current rsync dir at '{}'",
+                tmp_name.display()
             )
         })?;
     }
 
     std::os::unix::fs::symlink(new_revision.dir_name(), &tmp_name).with_context(|| {
         format!(
-            "Could not create temporary symlink for new rsync content at '{:?}'",
-            tmp_name
+            "Could not create temporary symlink for new rsync content at '{}'",
+            tmp_name.display()
         )
     })?;
 
     std::fs::rename(&tmp_name, &current_path).with_context(|| {
         format!(
-            "Could not rename symlink for current rsync dir from '{:?}' to '{:?}'",
-            tmp_name, current_path
+            "Could not rename symlink for current rsync dir from '{}' to '{}'",
+            tmp_name.display(), current_path.display()
         )
     })?;
 
@@ -123,24 +123,24 @@ fn rename_new_revision_dir_to_current(
 
         if current_path.exists() {
             info!(
-                "Renaming the rsync directory for previous revision to: {:?}",
-                current_preserve_path
+                "Renaming the rsync directory for previous revision to: {}",
+                current_preserve_path.display()
             );
             std::fs::rename(&current_path, &current_preserve_path).with_context(|| {
                 format!(
-                    "Could not rename current rsync dir from '{:?}' to '{:?}'",
-                    current_path, current_preserve_path
+                    "Could not rename current rsync dir from '{}' to '{}'",
+                    current_path.display(), current_preserve_path.display()
                 )
             })?;
         }
     }
 
-    info!("Rename rsync dir for new revision to '{:?}'", current_path);
+    info!("Rename rsync dir for new revision to '{}'", current_path.display());
     std::fs::rename(&new_revision.path(config), &current_path).with_context(|| {
         format!(
-            "Could not rename new rsync dir from '{:?}' to '{:?}'",
-            new_revision.path(config),
-            current_path
+            "Could not rename new rsync dir from '{}' to '{}'",
+            new_revision.path(config).display(),
+            current_path.display()
         )
     })?;
 
@@ -160,11 +160,11 @@ impl RsyncDirState {
         let state_path = config.rsync_state_path();
         if state_path.exists() {
             let json_bytes = file_ops::read_file(&state_path)
-                .with_context(|| format!("Cannot read rsync state file at: {:?}", state_path))?;
+                .with_context(|| format!("Cannot read rsync state file at: {}", state_path.display()))?;
             serde_json::from_slice(json_bytes.as_ref()).with_context(|| {
                 format!(
-                    "Cannot deserialize json for current state from {:?}",
-                    state_path
+                    "Cannot deserialize json for current state from {}",
+                    state_path.display()
                 )
             })
         } else {
@@ -206,12 +206,12 @@ impl RsyncDirState {
             let path = old.revision.path(config);
             if path.exists() {
                 info!(
-                    "Removing rsync directory: {:?}, deprecated since: {}",
-                    path, old.since
+                    "Removing rsync directory: {}, deprecated since: {}",
+                    path.display(), old.since
                 );
                 // Try to remove the old directory if it still exists
                 std::fs::remove_dir_all(&path).with_context(|| {
-                    format!("Could not remove rsync dir for old revision at: {:?}", path)
+                    format!("Could not remove rsync dir for old revision at: {}", path.display())
                 })?;
             }
         }
@@ -267,7 +267,7 @@ impl RsyncFromSnapshotWriter {
     fn create_out_path_if_missing(&self) -> Result<()> {
         if !self.out_path.exists() {
             std::fs::create_dir_all(&self.out_path)
-                .with_context(|| format!("Cannot create output directory for rsync at {:?}", &self.out_path))
+                .with_context(|| format!("Cannot create output directory for rsync at {}", &self.out_path.display()))
         } else {
             Ok(())
         }

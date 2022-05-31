@@ -273,14 +273,14 @@ mod tests {
     fn assert_file_dir_exists(dir: &Path, path: &str) {
         let path = dir.join(path);
         if !path.exists() {
-            panic!("Path {:?} does not exist!", path);
+            panic!("Path {} does not exist!", path.display());
         }
     }
 
     fn assert_file_dir_removed(dir: &Path, path: &str) {
         let path = dir.join(path);
         if path.exists() {
-            panic!("Path {:?} was not removed!", path);
+            panic!("Path {} was not removed!", path.display());
         }
     }
 
