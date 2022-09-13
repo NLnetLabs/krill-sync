@@ -1,4 +1,4 @@
 krill-sync is a tool to synchronize an RRDP and/or Rsync server with a "hidden" remote RFC 8182 RRDP publication point. 
 
 Read more here:
-https://github.com/NLnetLabs/krill-sync/blob/main/README.md
+https://github.com/NLnetLabs/krill-sync/
