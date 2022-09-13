@@ -42,6 +42,8 @@ on:
       - 'LICENSE'
       - 'README.md'
 
+  workflow_dispatch:
+
 defaults:
   run:
     # see: https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#using-a-specific-shell
