@@ -18,9 +18,6 @@ jobs:
     # Set @vN to the latest released version.
     #
     uses: NLnetLabs/.github/.github/workflows/pkg-rust.yml@v1
-    #
-    # Docker related 'secrets' and 'with' settings are optional unless you set 'docker_build_rules' or 'docker_build_rules_path'.
-    #
     with:
       #
       # Define the desired build stages. Each xxx_rules(_path) setting is optional but at least one should be set.
