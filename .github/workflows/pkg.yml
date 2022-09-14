@@ -17,8 +17,7 @@ jobs:
     #
     # Set @vN to the latest released version.
     #
-    uses: NLnetLabs/.github/.github/workflows/pkg-rust.yml@fix_docker_org_is_required
-
+    uses: NLnetLabs/.github/.github/workflows/pkg-rust.yml@v1
     #
     # Docker related 'secrets' and 'with' settings are optional unless you set 'docker_build_rules' or 'docker_build_rules_path'.
     #
@@ -37,4 +36,3 @@ jobs:
       #
       deb_extra_build_packages: libssl-dev
       deb_maintainer: The NLnet Labs RPKI Team <rpki@nlnetlabs.nl>
-
