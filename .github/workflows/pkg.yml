@@ -17,7 +17,7 @@ jobs:
     #
     # Set @vN to the latest released version.
     #
-    uses: NLnetLabs/.github/.github/workflows/pkg-rust.yml@v1
+    uses: NLnetLabs/ploutos/.github/workflows/pkg-rust.yml@v1
     with:
       #
       # Define the desired build stages. Each xxx_rules(_path) setting is optional but at least one should be set.
