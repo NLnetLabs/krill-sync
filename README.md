@@ -8,15 +8,10 @@ and rsync servers are used to make the RPKI repository content available.
 
 ## Changelog
 
-25-05-2021 v0.2.1-rc3
-
-Fix:
-- Support empty snapshot (#62)
-
-
-19-04-2021 v0.2.1-rc2
+29-11-2022 v0.2.1
 
 This release includes fixes for the following issues:
+- Support empty snapshot (#62)
 - Increase cleanup-after default to 1 hour (#54)
 - Write new notification file only on change (#55)
 - Respect --insecure option (#59)
