@@ -48,7 +48,7 @@ pub fn update_from_rrdp_state(
             include_host_and_module: config.rsync_include_host,
         };
         writer.create_out_path_if_missing()?;
-        writer.from_snapshot_path(&snapshot_path)?;
+        writer.for_snapshot_path(&snapshot_path)?;
 
         if config.rsync_dir_use_symlinks() {
             symlink_current_to_new_revision_dir(&new_revision, config)?;
@@ -99,7 +99,8 @@ fn symlink_current_to_new_revision_dir(
     std::fs::rename(&tmp_name, &current_path).with_context(|| {
         format!(
             "Could not rename symlink for current rsync dir from '{}' to '{}'",
-            tmp_name.display(), current_path.display()
+            tmp_name.display(),
+            current_path.display()
         )
     })?;
 
@@ -129,13 +130,17 @@ fn rename_new_revision_dir_to_current(
             std::fs::rename(&current_path, &current_preserve_path).with_context(|| {
                 format!(
                     "Could not rename current rsync dir from '{}' to '{}'",
-                    current_path.display(), current_preserve_path.display()
+                    current_path.display(),
+                    current_preserve_path.display()
                 )
             })?;
         }
     }
 
-    info!("Rename rsync dir for new revision to '{}'", current_path.display());
+    info!(
+        "Rename rsync dir for new revision to '{}'",
+        current_path.display()
+    );
     std::fs::rename(&new_revision.path(config), &current_path).with_context(|| {
         format!(
             "Could not rename new rsync dir from '{}' to '{}'",
@@ -159,8 +164,9 @@ impl RsyncDirState {
     fn recover(config: &Config) -> Result<Self> {
         let state_path = config.rsync_state_path();
         if state_path.exists() {
-            let json_bytes = file_ops::read_file(&state_path)
-                .with_context(|| format!("Cannot read rsync state file at: {}", state_path.display()))?;
+            let json_bytes = file_ops::read_file(&state_path).with_context(|| {
+                format!("Cannot read rsync state file at: {}", state_path.display())
+            })?;
             serde_json::from_slice(json_bytes.as_ref()).with_context(|| {
                 format!(
                     "Cannot deserialize json for current state from {}",
@@ -207,11 +213,15 @@ impl RsyncDirState {
             if path.exists() {
                 info!(
                     "Removing rsync directory: {}, deprecated since: {}",
-                    path.display(), old.since
+                    path.display(),
+                    old.since
                 );
                 // Try to remove the old directory if it still exists
                 std::fs::remove_dir_all(&path).with_context(|| {
-                    format!("Could not remove rsync dir for old revision at: {}", path.display())
+                    format!(
+                        "Could not remove rsync dir for old revision at: {}",
+                        path.display()
+                    )
                 })?;
             }
         }
@@ -260,14 +270,17 @@ struct RsyncFromSnapshotWriter {
 }
 
 impl RsyncFromSnapshotWriter {
-
     /// Creates an empty directory for the rsync out_path. Particularly needed if the snapshot
     /// is empty since no files (and parent dirs) would be created in that case - and we want to
     /// see an empty directory. See issue #62.
     fn create_out_path_if_missing(&self) -> Result<()> {
         if !self.out_path.exists() {
-            std::fs::create_dir_all(&self.out_path)
-                .with_context(|| format!("Cannot create output directory for rsync at {}", &self.out_path.display()))
+            std::fs::create_dir_all(&self.out_path).with_context(|| {
+                format!(
+                    "Cannot create output directory for rsync at {}",
+                    &self.out_path.display()
+                )
+            })
         } else {
             Ok(())
         }
@@ -275,7 +288,7 @@ impl RsyncFromSnapshotWriter {
 
     /// Processes the given snapshot and writes any published files under the
     /// rsync out_path directory
-    fn from_snapshot_path(&mut self, snapshot: &Path) -> Result<()> {
+    fn for_snapshot_path(&mut self, snapshot: &Path) -> Result<()> {
         let source_file = File::open(snapshot)?;
         let buf_reader = BufReader::new(source_file);
         self.process(buf_reader)?;
@@ -385,7 +398,7 @@ mod tests {
                 out_path,
                 include_host_and_module,
             };
-            writer.from_snapshot_path(&snapshot_path).unwrap();
+            writer.for_snapshot_path(&snapshot_path).unwrap();
 
             fn check_mtime(dir: &Path, path: &str, timestamp: i64) {
                 let path = dir.join(path);
