@@ -31,7 +31,7 @@ impl Time {
 
 impl fmt::Display for Time {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let time = Local.timestamp(self.0, 0);
+        let time = Local.timestamp_opt(self.0, 0).unwrap();
         write!(f, "{}", time.to_rfc3339())
     }
 }
