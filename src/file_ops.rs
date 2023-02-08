@@ -22,17 +22,25 @@ pub fn create_file(file_path: &Path) -> Result<std::fs::File> {
         .parent()
         .ok_or_else(|| anyhow!("Error determining parent of {}", file_path.display()))?;
 
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Cannot create dir {} for file {}", dir.to_string_lossy(), file_path.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| {
+        format!(
+            "Cannot create dir {} for file {}",
+            dir.to_string_lossy(),
+            file_path.display()
+        )
+    })?;
 
-    std::fs::File::create(file_path).with_context(|| format!("Cannot create file {}", file_path.display()))
+    std::fs::File::create(file_path)
+        .with_context(|| format!("Cannot create file {}", file_path.display()))
 }
 
 pub fn remove_file_and_empty_parent_dirs(path: &Path) -> Result<()> {
     if path.is_file() {
-        std::fs::remove_file(path).with_context(|| format!("Cannot remove file {}", path.display()))?;
+        std::fs::remove_file(path)
+            .with_context(|| format!("Cannot remove file {}", path.display()))?;
     } else if path.is_dir() {
-        std::fs::remove_dir(path).with_context(|| format!("Cannot remove dir {}", path.display()))?;
+        std::fs::remove_dir(path)
+            .with_context(|| format!("Cannot remove dir {}", path.display()))?;
     }
 
     // Recurse to do a 'best effort' removal of the parent if it exists. This
