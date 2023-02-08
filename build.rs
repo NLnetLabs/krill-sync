@@ -9,9 +9,8 @@ fn main() {
     if version < Version::parse("1.42.0").unwrap() {
         eprintln!(
             "\n\nAt least Rust version 1.42 is required.\n\
-             Version {} is used for building.\n\
-             Build aborted.\n\n",
-            version
+             Version {version} is used for building.\n\
+             Build aborted.\n\n"
         );
         panic!();
     }

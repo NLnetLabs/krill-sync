@@ -53,7 +53,7 @@ where
     D: Deserializer<'de>,
 {
     let base64_str = String::deserialize(d)?;
-    let bytes = base64::decode(&base64_str).map_err(serde::de::Error::custom)?;
+    let bytes = base64::decode(base64_str).map_err(serde::de::Error::custom)?;
     Ok(Bytes::from(bytes))
 }
 

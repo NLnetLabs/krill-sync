@@ -141,7 +141,7 @@ fn rename_new_revision_dir_to_current(
         "Rename rsync dir for new revision to '{}'",
         current_path.display()
     );
-    std::fs::rename(&new_revision.path(config), &current_path).with_context(|| {
+    std::fs::rename(new_revision.path(config), &current_path).with_context(|| {
         format!(
             "Could not rename new rsync dir from '{}' to '{}'",
             new_revision.path(config).display(),
@@ -247,7 +247,7 @@ impl RsyncRevision {
     }
 
     fn path(&self, config: &Config) -> PathBuf {
-        config.rsync_dir.join(&self.dir_name())
+        config.rsync_dir.join(self.dir_name())
     }
 
     fn deprecate(self) -> DeprecatedRsyncRevision {
@@ -362,7 +362,7 @@ fn fix_since(path: &Path, data: &[u8]) -> Result<()> {
     .map_err(|_| anyhow!("Cannot parse object at: {} to derive mtime", path_str))?;
 
     let mtime = FileTime::from_unix_time(time.timestamp(), 0);
-    set_file_mtime(&path, mtime).map_err(|e| {
+    set_file_mtime(path, mtime).map_err(|e| {
         anyhow!(
             "Cannot modify mtime for object at: {}, error: {}",
             path_str,

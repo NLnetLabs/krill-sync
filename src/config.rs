@@ -51,7 +51,7 @@ impl Replace for PathBuf {
     fn replace(&self, from_str: &str, to: &Path) -> PathBuf {
         let to_str = format!("{}", to.display());
         let self_str = format!("{}", self.display());
-        PathBuf::from(self_str.replace(&from_str, &to_str))
+        PathBuf::from(self_str.replace(from_str, &to_str))
     }
 }
 

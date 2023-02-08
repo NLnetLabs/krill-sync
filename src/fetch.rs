@@ -108,7 +108,7 @@ impl FetchSource {
 
                 let response = request_builder
                     .send()
-                    .with_context(|| format!("Could not GET: {}", uri))?;
+                    .with_context(|| format!("Could not GET: {uri}"))?;
 
                 match response.status() {
                     StatusCode::OK => {
@@ -123,10 +123,7 @@ impl FetchSource {
                         };
 
                         let bytes = response.bytes().with_context(|| {
-                            format!(
-                                "Got no response from '{}' even though the status was OK",
-                                uri
-                            )
+                            format!("Got no response from '{uri}' even though the status was OK")
                         })?;
 
                         Ok(FetchResponse::Data { bytes, etag })
@@ -179,9 +176,9 @@ impl FetchSource {
         match self {
             FetchSource::File(base_path) => Ok(FetchSource::File(base_path.join(rel))),
             FetchSource::Uri(base_uri, mode) => Ok(FetchSource::Uri(
-                base_uri.join(rel.as_bytes()).with_context(|| {
-                    format!("Cannot map rel path '{}' to uri: {}", rel, base_uri)
-                })?,
+                base_uri
+                    .join(rel.as_bytes())
+                    .with_context(|| format!("Cannot map rel path '{rel}' to uri: {base_uri}"))?,
                 *mode,
             )),
         }
@@ -199,8 +196,8 @@ impl fmt::Display for FetchSource {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             FetchSource::Uri(uri, mode) => match mode {
-                FetchMode::Strict => write!(f, "{}", uri),
-                FetchMode::Insecure => write!(f, "{} (accept insecure)", uri),
+                FetchMode::Strict => write!(f, "{uri}"),
+                FetchMode::Insecure => write!(f, "{uri} (accept insecure)"),
             },
             FetchSource::File(path) => {
                 write!(f, "file: {}", path.to_string_lossy())
