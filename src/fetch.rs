@@ -26,6 +26,15 @@ pub enum FetchResponse {
     UnModified,
 }
 
+impl FetchResponse {
+    pub fn try_into_data(self) -> Result<Bytes> {
+        match self {
+            FetchResponse::Data { bytes, .. } => Ok(bytes),
+            _ => Err(anyhow!("No data in response.")),
+        }
+    }
+}
+
 //------------ NotificationFileResponse --------------------------------------
 pub enum NotificationFileResponse {
     Data {
@@ -251,7 +260,7 @@ impl FetchMap {
 
 //------------ Fetcher -------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Fetcher {
     notification_uri: uri::Https,
     fetch_map: Option<FetchMap>,
