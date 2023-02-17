@@ -859,7 +859,7 @@ dependencies = [
 [[package]]
 name = "rpki"
 version = "0.15.10-dev"
-source = "git+https://github.com/NLnetLabs/rpki-rs?branch=access-as-provider-attestation-data#4d6068222f6744d32a82ff1770a37046baff33f1"
+source = "git+https://github.com/NLnetLabs/rpki-rs#80ca2f627892f863bb075974ae3fa545e519d379"
 dependencies = [
  "base64 0.13.0",
  "bcder",
