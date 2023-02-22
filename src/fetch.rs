@@ -16,6 +16,7 @@ use rpki::{
     rrdp::{Hash, NotificationFile},
     uri::{self, Https},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{config, file_ops};
 
@@ -56,7 +57,7 @@ impl NotificationFileResponse {
 }
 
 //------------ FetchSource ---------------------------------------------------
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FetchMode {
     Strict,
     Insecure, // accept self-signed or otherwise invalid HTTPs certificates.
@@ -69,7 +70,7 @@ impl FetchMode {
 }
 
 //------------ FetchSource ---------------------------------------------------
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FetchSource {
     File(PathBuf),
     Uri(uri::Https, FetchMode),
@@ -229,7 +230,7 @@ impl FromStr for FetchSource {
 
 //------------ FetchMap ------------------------------------------------------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FetchMap {
     base_uri: uri::Https,
     base_fetch: FetchSource,
@@ -260,7 +261,7 @@ impl FetchMap {
 
 //------------ Fetcher -------------------------------------------------------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Fetcher {
     notification_uri: uri::Https,
     fetch_map: Option<FetchMap>,

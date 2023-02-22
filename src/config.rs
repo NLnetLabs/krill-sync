@@ -125,6 +125,19 @@ pub struct Config {
 
     #[structopt(skip)]
     pub fetch_map: Option<FetchMap>,
+
+    // Validation support
+    /// Optional TAL file(s) used to warn about, or reject, invalid content.
+    #[structopt(long = "tal", value_name = "tal file", parse(from_os_str))]
+    pub tal_files: Vec<PathBuf>,
+
+    /// If true: reject if there are objects invalid under configured TAL(s)
+    /// Note that this is limited to objects that are expected to be present and
+    /// valid under the TAL(s). Other objects are not validated and are always
+    /// accepted. Restrictions on this MUST NOT be enforced in krill-sync, and
+    /// unfortunately cannot really be enforced in the Publication Server either.
+    #[structopt(long = "tal-reject-invalid")]
+    pub tal_reject_invalid: bool,
 }
 
 impl Config {
@@ -201,6 +214,8 @@ pub fn create_test_config(
         notification_uri,
         source_uri_base: Some(source_uri_base),
         fetch_map: None, // will be set in post_configure
+        tal_files: vec![],
+        tal_reject_invalid: false,
     };
     post_configure(config).unwrap()
 }

@@ -11,6 +11,7 @@ use rpki::{
         Cert, ResourceCert,
     },
 };
+use serde::{Deserialize, Serialize};
 
 use crate::fetch::{FetchMode, FetchSource};
 
@@ -21,9 +22,9 @@ use crate::fetch::{FetchMode, FetchSource};
 /// case is a [`FetchSource`] so that it can be mapped
 /// to disk (or later perhaps even memory) for testing
 /// and/or efficiency.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Tal {
-    name: Arc<TalInfo>,
+    name: String,
     source: FetchSource,
     public_key: PublicKey,
 }
@@ -50,8 +51,6 @@ impl Tal {
 
         let public_key = real_tal.key_info().clone();
 
-        let name = Arc::new(TalInfo::from_name(name));
-
         Ok(Tal {
             name,
             public_key,
@@ -70,8 +69,10 @@ impl Tal {
         let cert =
             Cert::decode(bytes).map_err(|e| anyhow!("Cannot decode TA certificate: {}", e))?;
 
+        let tal = Arc::new(TalInfo::from_name(self.name.clone()));
+
         let cert = cert
-            .validate_ta_at(self.name.clone(), true, when)
+            .validate_ta_at(tal, true, when)
             .map_err(|e| anyhow!("Invalid TA certificate: {}", e))?;
 
         if cert.subject_public_key_info() != &self.public_key {

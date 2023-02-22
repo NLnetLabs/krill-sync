@@ -9,11 +9,17 @@
 //! need here - e.g. we do not support rsync fetching.
 //!
 
+// We use URIs for hash map keys. We never change them, but technically
+// they are mutable.
+#[allow(clippy::mutable_key_type)]
 mod report;
 pub use self::report::*;
 
 mod tal;
 pub use self::tal::*;
 
+// We use URIs for hash map keys. We never change them, but technically
+// they are mutable.
+#[allow(clippy::mutable_key_type)]
 mod validator;
 pub use self::validator::*;

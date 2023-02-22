@@ -1,4 +1,8 @@
-use std::{collections::HashMap, convert::TryFrom};
+use std::{
+    collections::HashMap,
+    convert::TryFrom,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
@@ -6,9 +10,10 @@ use rpki::{
     repository::{
         aspa::Aspa, error::VerificationError, x509::Time, Cert, Crl, Manifest, ResourceCert, Roa,
     },
-    rrdp::Snapshot,
+    rrdp::{NotificationFile, Snapshot},
     uri,
 };
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::fetch::{FetchMode, Fetcher};
 
@@ -17,43 +22,88 @@ use super::{
     ValidatedChild, ValidatedRoa, ValidatedRouterCert, ValidationIssue, ValidationReport,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Validator {
-    tal: Tal,
+    tals: Vec<Tal>,
     repositories: VisitedRepositories,
 }
 
 impl Validator {
-    pub fn new(tal: Tal, fetchers: Vec<Fetcher>) -> Self {
+    pub fn new(tals: Vec<Tal>, fetchers: Vec<Fetcher>) -> Self {
         Validator {
-            tal,
+            tals,
             repositories: VisitedRepositories {
-                fetchers: fetchers
-                    .into_iter()
-                    .map(|f| (f.notification_uri().clone(), f))
-                    .collect(),
-                data: HashMap::new(),
+                fetchers: Mutex::new(
+                    fetchers
+                        .into_iter()
+                        .map(|fetcher| (fetcher.notification_uri().clone(), Arc::new(fetcher)))
+                        .collect(),
+                ),
+                data: Mutex::new(HashMap::new()),
             },
         }
     }
 
-    pub fn validate(&mut self) -> Result<ValidationReport> {
-        self.validate_at(Time::now())
+    /// Checks whether this Validator includes the same TALs and
+    /// has at least all fetchers included in the other validator.
+    ///
+    /// If so, then this Validator can be considered an equivalent,
+    /// existing, instance that should be used. Note that this Validator
+    /// is not *equal* because it may include other repository fetchers
+    /// and it would have downloaded repository data.
+    pub fn equivalent(&self, other: &Validator) -> bool {
+        let self_repositories = self.repositories.fetchers.lock().unwrap();
+        let other_repositories = other.repositories.fetchers.lock().unwrap();
+
+        for other_repo in other_repositories.values() {
+            if !self_repositories
+                .values()
+                .any(|self_repo| self_repo == other_repo)
+            {
+                return false;
+            }
+        }
+
+        self.tals == other.tals
     }
 
-    pub fn validate_at(&mut self, when: Time) -> Result<ValidationReport> {
-        let ta_cert = self.tal.validate_at(when)?;
+    pub fn validate(&self, local: Option<&LocalNotificationFile>) -> Result<ValidationReport> {
+        self.validate_at(local, Time::now())
+    }
+
+    pub fn validate_at(
+        &self,
+        local: Option<&LocalNotificationFile>,
+        when: Time,
+    ) -> Result<ValidationReport> {
+        let mut report = ValidationReport::default();
+
+        for tal in &self.tals {
+            report.add_other(self.validate_ta_at(tal, local, when)?);
+        }
+
+        Ok(report)
+    }
+
+    pub fn validate_ta_at(
+        &self,
+        tal: &Tal,
+        local: Option<&LocalNotificationFile>,
+        when: Time,
+    ) -> Result<ValidationReport> {
+        let ta_cert = tal.validate_at(when)?;
 
         let info = ValidatedCaCertInfo::try_from(&ta_cert)
             .map_err(|e| anyhow!(format!("Invalid TA certificate: {e}")))?;
 
-        Ok(self.validate_tree_at(&ta_cert, &info, when))
+        Ok(self.validate_tree_at(&ta_cert, &info, local, when))
     }
 
     fn validate_tree_at(
-        &mut self,
+        &self,
         resource_cert: &ResourceCert,
         ca_cert_info: &ValidatedCaCertInfo,
+        local: Option<&LocalNotificationFile>,
         when: Time,
     ) -> ValidationReport {
         let mut report = ValidationReport::default();
@@ -72,43 +122,43 @@ impl Validator {
                         sia_ca.clone(),
                         "No SIA RRDP entry",
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
 
-            let data = match self.repositories.update(sia_rrdp) {
+            let data = match self.repositories.update(sia_rrdp, local) {
                 Ok(data) => data,
                 Err(e) => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
                         sia_ca.clone(),
                         format!("Could not get repo data from {sia_rrdp}: {e}"),
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
 
-            let mft_bytes = match data.objects.get(mft_uri) {
+            let mft_obj = match data.objects.get(mft_uri) {
                 Some(bytes) => bytes,
                 None => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
                         mft_uri.clone(),
                         "No manifest found",
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
 
-            let mft = match Manifest::decode(mft_bytes.clone(), true) {
+            let mft = match Manifest::decode(mft_obj.bytes().clone(), true) {
                 Ok(mft) => mft,
                 Err(e) => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
                         mft_uri.clone(),
                         format!("Cannot parse manifest: {e}"),
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
@@ -120,7 +170,7 @@ impl Validator {
                         mft_uri.clone(),
                         format!("Invalid manifest: {e}"),
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
@@ -135,7 +185,7 @@ impl Validator {
                         mft_uri.clone(),
                         "Manifest EE has no CRL uri",
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
@@ -147,40 +197,40 @@ impl Validator {
                         mft_uri.clone(),
                         format!("CRL with uri {crl_uri} is not on manifest"),
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
 
-            let crl_bytes = match data.objects.get(crl_uri) {
+            let crl_obj = match data.objects.get(crl_uri) {
                 Some(bytes) => bytes,
                 None => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
                         crl_uri.clone(),
                         format!("CRL at {crl_uri} not found"),
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
 
-            if crl_hash.verify(crl_bytes).is_err() {
+            if crl_hash.verify(crl_obj.bytes()).is_err() {
                 ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
                     crl_uri.clone(),
                     "CRL does not match hash on manifest",
                 ));
-                report.add(ca_cert);
+                report.add_cert(ca_cert);
                 return report;
             };
 
-            let crl = match Crl::decode(crl_bytes.clone()) {
+            let crl = match Crl::decode(crl_obj.bytes().clone()) {
                 Ok(crl) => crl,
                 Err(e) => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
                         crl_uri.clone(),
                         format!("Could not parse CRL: {e}"),
                     ));
-                    report.add(ca_cert);
+                    report.add_cert(ca_cert);
                     return report;
                 }
             };
@@ -193,7 +243,7 @@ impl Validator {
                     crl_uri.clone(),
                     "CRL not validly signed",
                 ));
-                report.add(ca_cert);
+                report.add_cert(ca_cert);
                 return report;
             };
 
@@ -202,7 +252,7 @@ impl Validator {
                     crl_uri.clone(),
                     "CRL is stale",
                 ));
-                report.add(ca_cert);
+                report.add_cert(ca_cert);
                 return report;
             }
 
@@ -211,7 +261,7 @@ impl Validator {
                     mft_uri.clone(),
                     "Manifest was revoked",
                 ));
-                report.add(ca_cert);
+                report.add_cert(ca_cert);
                 return report;
             }
 
@@ -222,8 +272,8 @@ impl Validator {
             // of those objects individually and just report issues
             // if applicable, but continue with the next object.
             for (uri, hash) in mft_entries.into_iter() {
-                let bytes = match data.objects.get(&uri) {
-                    Some(bytes) => bytes,
+                let object = match data.objects.get(&uri) {
+                    Some(object) => object,
                     None => {
                         ca_cert
                             .add_issue(ValidationIssue::with_uri_and_msg(uri, "Object not found"));
@@ -231,7 +281,7 @@ impl Validator {
                     }
                 };
 
-                if hash.verify(bytes).is_err() {
+                if hash.verify(object.bytes()).is_err() {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
                         uri,
                         "Object does not match manifest hash",
@@ -247,7 +297,7 @@ impl Validator {
                 };
 
                 match extension {
-                    "roa" => match Roa::decode(bytes.clone(), true) {
+                    "roa" => match Roa::decode(object.bytes().clone(), true) {
                         Ok(roa) => match roa.process(resource_cert, true, |roa_cert| {
                             if crl.contains(roa_cert.serial_number()) {
                                 Err(VerificationError::new(format!("ROA at {uri} was revoked"))
@@ -275,7 +325,7 @@ impl Validator {
                         }
                     },
                     "cer" => {
-                        match Cert::decode(bytes.clone()) {
+                        match Cert::decode(object.bytes().clone()) {
                             Ok(child_cert) => {
                                 if child_cert.is_ca() {
                                     // This could be a CA certificate delegated to a child
@@ -335,7 +385,6 @@ impl Validator {
                                             );
                                         }
                                     }
-                                    todo!("validate router cert ")
                                 }
                             }
                             Err(e) => {
@@ -346,7 +395,7 @@ impl Validator {
                             }
                         };
                     }
-                    "asa" => match Aspa::decode(bytes.clone(), true) {
+                    "asa" => match Aspa::decode(object.bytes().clone(), true) {
                         Ok(aspa) => match aspa.process(resource_cert, true, |ee| {
                             if crl.contains(ee.serial_number()) {
                                 Err(VerificationError::new(format!("ROA at {uri} was revoked"))
@@ -387,28 +436,47 @@ impl Validator {
         }
 
         // Add the results for this CA certificate validation.
-        report.add(ca_cert);
+        report.add_cert(ca_cert);
 
         // recurse child certificates
         for (cert, info) in child_certificates {
-            report.add_all(self.validate_tree_at(&cert, &info, when));
+            report.add_other(self.validate_tree_at(&cert, &info, local, when));
         }
 
         report
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct VisitedRepositories {
-    fetchers: HashMap<uri::Https, Fetcher>,
-    data: HashMap<uri::Https, RepositoryData>,
+    fetchers: Mutex<HashMap<uri::Https, Arc<Fetcher>>>,
+    data: Mutex<HashMap<uri::Https, Arc<RepositoryData>>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalNotificationFile {
+    pub uri: uri::Https,
+    pub notification: NotificationFile,
 }
 
 impl VisitedRepositories {
-    fn update(&mut self, notify_uri: &uri::Https) -> Result<&RepositoryData> {
-        if !self.data.contains_key(notify_uri) {
+    fn update(
+        &self,
+        notify_uri: &uri::Https,
+        local: Option<&LocalNotificationFile>,
+    ) -> Result<Arc<RepositoryData>> {
+        let mut data = self.data.lock().unwrap();
+        if !data.contains_key(notify_uri) {
             let fetcher = self.get_fetcher(notify_uri)?;
-            let (notification, _) = fetcher.read_notification_file(None)?.content()?;
+            let notification = if let Some(local) = local {
+                if &local.uri == notify_uri {
+                    local.notification.clone()
+                } else {
+                    fetcher.read_notification_file(None)?.content()?.0
+                }
+            } else {
+                fetcher.read_notification_file(None)?.content()?.0
+            };
 
             let snapshot_uri_hash = notification.snapshot();
             let snapshot_source = fetcher.resolve_source(snapshot_uri_hash.uri())?;
@@ -426,40 +494,73 @@ impl VisitedRepositories {
             // }
 
             #[allow(clippy::mutable_key_type)]
-            let objects: HashMap<uri::Rsync, Bytes> = snapshot
+            let objects: HashMap<uri::Rsync, RepositoryObject> = snapshot
                 .into_elements()
                 .into_iter()
-                .map(|e| e.unpack())
+                .map(|e| {
+                    let (uri, bytes) = e.unpack();
+                    (uri, RepositoryObject { bytes })
+                })
                 .collect();
 
-            self.data
-                .insert(notify_uri.clone(), RepositoryData { objects });
+            data.insert(notify_uri.clone(), Arc::new(RepositoryData { objects }));
         }
 
-        self.data
-            .get(notify_uri)
+        data.get(notify_uri)
+            .cloned()
             .ok_or(anyhow!("No data for repository at: {}", notify_uri))
     }
 
-    fn get_fetcher(&mut self, notify_uri: &uri::Https) -> Result<&Fetcher> {
-        if !self.fetchers.contains_key(notify_uri) {
+    fn get_fetcher(&self, notify_uri: &uri::Https) -> Result<Arc<Fetcher>> {
+        let mut fetchers = self.fetchers.lock().unwrap();
+
+        if !fetchers.contains_key(notify_uri) {
             let fetcher = Fetcher::new(notify_uri.clone(), None, FetchMode::Insecure);
-            self.fetchers.insert(notify_uri.clone(), fetcher);
+            fetchers.insert(notify_uri.clone(), Arc::new(fetcher));
         }
 
-        self.fetchers
+        fetchers
             .get(notify_uri)
+            .cloned()
             .ok_or(anyhow!("No fetcher for repository at: {}", notify_uri))
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RepositoryData {
     // todo: Track session and serial so we can apply deltas
     //       rather than getting the full snapshot.
     //       This only becomes relevant when we start using this from
     //       a daemon and/or persist this data between sync sessions.
-    objects: HashMap<uri::Rsync, Bytes>,
+    objects: HashMap<uri::Rsync, RepositoryObject>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RepositoryObject {
+    #[serde(serialize_with = "ser_bytes", deserialize_with = "de_bytes")]
+    bytes: Bytes,
+}
+
+impl RepositoryObject {
+    pub fn bytes(&self) -> &Bytes {
+        &self.bytes
+    }
+}
+
+pub fn de_bytes<'de, D>(d: D) -> Result<Bytes, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let some = String::deserialize(d)?;
+    let dec = base64::decode(some).map_err(de::Error::custom)?;
+    Ok(Bytes::from(dec))
+}
+
+pub fn ser_bytes<S>(b: &Bytes, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    base64::encode(b).serialize(s)
 }
 
 #[cfg(test)]
@@ -489,10 +590,10 @@ mod tests {
         );
         let fetcher = Fetcher::new(notification_uri, Some(fetch_map), FetchMode::Insecure);
 
-        let mut validator = Validator::new(tal, vec![fetcher]);
+        let validator = Validator::new(vec![tal], vec![fetcher]);
 
         validator
-            .validate_at(Time::utc(2023, 2, 13, 15, 58, 00))
+            .validate_at(None, Time::utc(2023, 2, 13, 15, 58, 00))
             .unwrap();
     }
 }

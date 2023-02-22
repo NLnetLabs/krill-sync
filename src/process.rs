@@ -19,21 +19,52 @@ pub fn process(config: &Config) -> Result<()> {
     };
 
     // ===================================================================
-    // Update the RRDP state, if there are any changes in the source:
-    //  - remember if there was a change for writing a new rsync folder
+    // Update the RRDP state, if there are any changes in the source.
+    // ===================================================================
+    //
+    // This will save new snapshot and delta files to disk. If there
+    // are no changes, i.e. the notification file is not changed, then
+    // this is essentially a no-op.
+    //
+    // Note that while the new snapshot and deltas are saved immediately,
+    // we only save the new notification file is later. This allows us to
+    // run a validation check on the new RRDP files before relying parties
+    // will see the updated notification file.
     // ===================================================================
     let changed = rrdp_state.update(config.rrdp_max_deltas, &config.fetcher())?;
+
+    // ===================================================================
+    // Pre-validate if there were any changes.
+    // ===================================================================
+    //
+    // If there were any changes, then pre-validate the newly written snapshot
+    // and delta files. If there are no validation issues we proceed without
+    // further comments. If there were issues then dependent on the
+    // configuration either just warn about these issues and continue (default),
+    // or reject the new files and exit with an error.
+    //
+    // If we exit here, we will leave the new snapshot and delta files in
+    // place as this may help in debugging. This does not affect relying
+    // parties because the notification file was not yet updated.
+    //
+    // Because the updated RrdpState is not persisted these files would be
+    // downloaded again in case krill-sync runs again.
+    // ===================================================================
+    if changed {
+        rrdp_state.pre_validate(config)?;
+    }
 
     // Clean up any RRDP files and empty parent directories if they had been
     // deprecated for more than the configured 'cleanup_after' time.
     rrdp_state.clean(config)?;
 
     // ===================================================================
-    // If enabled, use the latest local RRDP snapshot to create a local
-    // copy of the repository in the format needed to serve it as an Rsync
-    // repository.
+    // Update rsync state, if rsync support is enabled
     // ===================================================================
-
+    //
+    // Uses the latest local RRDP snapshot to create  a local copy of the
+    // repository in the format needed to serve it as an Rsync repository.
+    //
     // Note that we do NOT fetch from a remote Rsync repository using the
     // Rsync protocol. Rather we fetch from a remote RRDP repository and
     // represent it locally in a form suitable for serving via an Rsync
@@ -50,6 +81,7 @@ pub fn process(config: &Config) -> Result<()> {
     // We will also clean out old rsync directories if they had been
     // deprecated for more than the 'cleanup_after' time, even if there
     // was no new data to write (i.e. change == false).
+    // ===================================================================
     if config.rsync_enabled() {
         rsync::update_from_rrdp_state(&rrdp_state, changed, config)?;
     }

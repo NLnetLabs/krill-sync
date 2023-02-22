@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use log::{debug, info};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -16,12 +16,13 @@ use rpki::{
 
 use crate::{
     config::Config,
-    fetch::{Fetcher, NotificationFileResponse},
+    fetch::{FetchMap, FetchMode, FetchSource, Fetcher, NotificationFileResponse},
     file_ops,
     util::{self, Time},
+    validation::{LocalNotificationFile, Tal, Validator},
 };
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RrdpState {
     /// The notification source information
     notification_source: NotificationSource,
@@ -37,6 +38,10 @@ pub struct RrdpState {
 
     /// Deprecated files - which may be cleaned up after some time
     deprecated_files: Vec<DeprecatedFile>,
+
+    /// Embedded validator
+    #[serde(skip_serializing_if = "Option::is_none")]
+    validator: Option<Validator>,
 }
 
 impl RrdpState {
@@ -56,6 +61,7 @@ impl RrdpState {
             snapshot: None,
             deltas: VecDeque::new(),
             deprecated_files: vec![],
+            validator: None,
         })
     }
 
@@ -149,6 +155,144 @@ impl RrdpState {
         }
     }
 
+    /// Pre-validate the new RRDP state.
+    ///
+    /// Dependent on configuration
+    pub fn pre_validate(&mut self, config: &Config) -> Result<()> {
+        self.reconfigure_validator(config)?;
+
+        let candidate_notification = self.make_notification_file()?;
+        let local = LocalNotificationFile {
+            uri: config.notification_uri.clone(),
+            notification: candidate_notification,
+        };
+
+        if let Some(validator) = self.validator.as_ref() {
+            let report = validator.validate(Some(&local))?;
+
+            if let Some(rrdp_report) = report.rrdp_repositories.get(&config.notification_uri) {
+                let summary = format!(
+                    "{}: {} issues, {} certs, {} roas, {} vrps, {} aspas, {} router certs",
+                    config.notification_uri,
+                    rrdp_report.issues.len(),
+                    rrdp_report.nr_ca_certs,
+                    rrdp_report.nr_roas,
+                    rrdp_report.nr_vrps,
+                    rrdp_report.nr_aspas,
+                    rrdp_report.nr_router_certs
+                );
+                if rrdp_report.issues.is_empty() {
+                    info!("{summary}");
+                    Ok(())
+                } else {
+                    let mut issues = vec![];
+                    for issue in &rrdp_report.issues {
+                        if let Some(uri) = &issue.uri {
+                            issues.push(format!("{} : {}", uri, issue.msg));
+                        } else {
+                            issues.push(issue.msg.clone());
+                        }
+                    }
+
+                    if config.tal_reject_invalid {
+                        error!("{summary}");
+                        for issue in issues {
+                            error!("   {issue}");
+                        }
+                        Err(anyhow!("Aborting sync because of validation issues"))
+                    } else {
+                        warn!("{summary}");
+                        for issue in issues {
+                            warn!("   {issue}");
+                        }
+                        Ok(())
+                    }
+                }
+            } else if config.tal_reject_invalid {
+                Err(anyhow!(
+                    "The repository {} was not seen in validation. Exiting",
+                    config.notification_uri
+                ))
+            } else {
+                warn!(
+                    "The repository {} was not seen in validation.",
+                    config.notification_uri
+                );
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Set up a new validator based on configuration.
+    ///
+    /// If there are no configured TAL files then this ensures that we
+    /// have no Validator - even if a previous run - with different
+    /// configuration settings had one.
+    ///
+    /// If there are configured TAL files, then we *always* revalidate
+    /// the TA certificates. And then we check whether a possible
+    /// pre-existing Validator for this state can be re-used. Re-using
+    /// an existing Validator has the benefit that we can use cached
+    /// repository data, and reduce the load and dependency on third
+    /// party repositories in the RPKI tree.
+    ///
+    /// But, we only do this in case there were no changes in the TALs,
+    /// or the configuration of our own RRDP notify XML and RRDP data
+    /// path. Although it might be possible to handle certain changes,
+    /// this can get fairly complicated - so in that case we just start
+    /// with a clean new Validator without existing state instead.
+    fn reconfigure_validator(&mut self, config: &Config) -> Result<()> {
+        if config.tal_files.is_empty() {
+            self.validator = None;
+        } else {
+            let validator = Self::create_validator(config)?;
+            if self.new_validator_needed(&validator) {
+                self.validator = Some(validator);
+            }
+        }
+        Ok(())
+    }
+
+    /// Creates a new Validator instance after validating the
+    /// configured TALs.
+    ///
+    /// Note that theoretically a Validator can be created with
+    /// an empty TAL list. It just would not have any work to do.
+    /// In practice we don't create such a validator, but leave
+    /// the validator option in `RrdpState` as None in that case
+    /// because this is more explicit, and it lets us clear out
+    /// unnecessary data in the state.
+    fn create_validator(config: &Config) -> Result<Validator> {
+        let mut tals = vec![];
+        for tal_file in &config.tal_files {
+            let tal_bytes = file_ops::read_file(tal_file)?;
+            let tal_name = tal_file.to_string_lossy().to_string();
+            let tal = Tal::parse(tal_name, tal_bytes, None)?;
+            tals.push(tal);
+        }
+
+        let notification_uri = config.notification_uri.clone();
+
+        let base_https = notification_uri
+            .parent()
+            .ok_or(anyhow!("cannot get parent dir of notification_uri"))?;
+
+        let fetch_map = FetchMap::new(base_https, FetchSource::File(config.rrdp_dir.clone()));
+        let fetcher = Fetcher::new(notification_uri, Some(fetch_map), FetchMode::Insecure);
+
+        Ok(Validator::new(tals, vec![fetcher]))
+    }
+
+    /// Return false if we have an existing Validator that can be used.
+    fn new_validator_needed(&self, new_validator: &Validator) -> bool {
+        self.validator
+            .as_ref()
+            .map(|existing| existing.equivalent(new_validator))
+            .unwrap_or(true)
+    }
+
     /// Cleans deprecated files and their parent directories if they are empty
     pub fn clean(&mut self, config: &Config) -> Result<()> {
         let clean_before = Time::seconds_ago(config.cleanup_after);
@@ -162,7 +306,8 @@ impl RrdpState {
             if path.exists() {
                 info!(
                     "Removing RRDP file: {}, deprecated since: {}",
-                    path.display(), deprecated.since
+                    path.display(),
+                    deprecated.since
                 );
                 file_ops::remove_file_and_empty_parent_dirs(path)?;
             }
@@ -205,8 +350,13 @@ impl RrdpState {
             )
         })?;
 
-        fs::rename(&path_tmp, &path_final)
-            .with_context(|| format!("Could not rename {} to {}", path_tmp.display(), path_final.display()))?;
+        fs::rename(&path_tmp, &path_final).with_context(|| {
+            format!(
+                "Could not rename {} to {}",
+                path_tmp.display(),
+                path_final.display()
+            )
+        })?;
 
         Ok(())
     }

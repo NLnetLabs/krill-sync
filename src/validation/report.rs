@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, fmt, str::FromStr};
+use std::{collections::HashMap, convert::TryFrom, fmt, str::FromStr};
 
 use rpki::{
     repository::{
@@ -12,87 +12,76 @@ use rpki::{
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 /// Report the outcome of a validation run.
-///
-/// What we are interested in:
-/// - Validated CA certificates:
-///     - URI of cert
-///     - Base64 (why not)
-///     - CertInfo
-///         - Validity Time
-///         - Parent cert URI (option: TA has no parent)
-///         - SIA
-///             - MFT
-///             - CA
-///             - RRDP (Option)
-///         - Resources (inherit resolved)
-///              - IPv4
-///              - IPv6
-///              - ASN
-///
-///    - Publication Point complete
-///    - Publication Point all valid
-///    - Publication Point no extras (keyroll..?)
-///
-///    - Manifest
-///        - uri
-///        - base64
-///        - certinfo
-///        - this update
-///        - next update
-///        - number
-///        - files
-///             - uri
-///             - hash
-///    - CRL
-///        - uri
-///        - base64
-///        - aki
-///        - this update
-///        - next update
-///        - revocations
-///
-///    - ROAs
-///        - URI
-///        - Base64
-///        - CertInfo
-///        - VRPs
-///    
-///   - ASPAs
-///        - URI
-///        - Base64
-///        - CertInfo
-///        - Aspa Attestations
-///
-///   - Child Cert
-///        - URI
-///        - base64
-///        - cert info
-///
-///  - BGPSec
-///        - URI
-///        - base64
-///        - cert info
-///
-///   - Ignored Object Types
-///        - URI
-///        - base64
-///
-///   - Errors
-///       - URI
-///       - Message
-///           (object parsing, expired, incomplete fetch, ...?)
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ValidationReport {
-    certs: Vec<ValidatedCaCertificate>,
+    pub certs: Vec<ValidatedCaCertificate>,
+    pub rrdp_repositories: HashMap<uri::Https, RepositoryReport>,
 }
 
 impl ValidationReport {
-    pub fn add(&mut self, validated_ca_certificate: ValidatedCaCertificate) {
-        self.certs.push(validated_ca_certificate);
+    pub fn add_cert(&mut self, cert: ValidatedCaCertificate) {
+        if let Some(rrdp_uri) = cert.ca_cert_info.sia_rrdp.clone() {
+            let repo_stats = self.rrdp_repositories.entry(rrdp_uri).or_default();
+            repo_stats.process_cert(&cert);
+        }
+        self.certs.push(cert);
     }
 
-    pub fn add_all(&mut self, mut other: Self) {
+    pub fn add_other(&mut self, mut other: Self) {
         self.certs.append(&mut other.certs);
+
+        for (uri, stats) in other.rrdp_repositories {
+            if let Some(existing) = self.rrdp_repositories.get_mut(&uri) {
+                existing.add_other(stats);
+            } else {
+                self.rrdp_repositories.insert(uri, stats);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct RepositoryReport {
+    pub nr_ca_certs: usize,
+    pub nr_roas: usize,
+    pub nr_vrps: usize,
+    pub nr_aspas: usize,
+    pub nr_router_certs: usize,
+    pub issues: Vec<ValidationIssue>,
+}
+
+impl RepositoryReport {
+    fn process_cert(&mut self, cert: &ValidatedCaCertificate) {
+        self.nr_ca_certs += cert.children.len();
+        self.nr_roas += cert.roas.len();
+
+        // We do not filter out unique VRPs here, but just count the number.
+        // If we really want unique VRPs then we should also check ROAs issued
+        // under other CA certificates - theoretically at least - they could
+        // contain duplicate VRPs if other CA certificates have (some of) the
+        // same resources as this certificate.
+        //
+        // So.. in short.. just counting the number of VRPs is fine for
+        // these stats.
+        let nr_vrps = cert.roas.iter().flat_map(|roa| &roa.vrps).count();
+
+        self.nr_vrps += nr_vrps;
+        self.nr_aspas += cert.aspas.len();
+        self.nr_router_certs += cert.router_certs.len();
+
+        if !cert.issues.is_empty() {
+            let mut cert = cert.clone();
+            self.issues.append(&mut cert.issues);
+        }
+    }
+
+    fn add_other(&mut self, mut other: Self) {
+        self.nr_ca_certs += other.nr_ca_certs;
+        self.nr_roas += other.nr_roas;
+        self.nr_vrps += other.nr_vrps;
+        self.nr_aspas += other.nr_aspas;
+        self.nr_router_certs += other.nr_router_certs;
+        self.issues.append(&mut other.issues);
     }
 }
 
@@ -205,7 +194,7 @@ impl ValidatedRoa {
 ///       krill are merged. Or.. rather put all of that in
 ///       krill-commons or something if/when we split krill into
 ///       sub-projects.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RoaPayload {
     asn: AsNumber,
     prefix: TypedPrefix,
@@ -336,11 +325,11 @@ pub enum AuthorizationFmtError {
 impl fmt::Display for AuthorizationFmtError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            AuthorizationFmtError::Pfx(s) => write!(f, "Invalid prefix string: {}", s),
-            AuthorizationFmtError::Asn(s) => write!(f, "Invalid asn in string: {}", s),
-            AuthorizationFmtError::Auth(s) => write!(f, "Invalid authorization string: {}", s),
+            AuthorizationFmtError::Pfx(s) => write!(f, "Invalid prefix string: {s}"),
+            AuthorizationFmtError::Asn(s) => write!(f, "Invalid asn in string: {s}"),
+            AuthorizationFmtError::Auth(s) => write!(f, "Invalid authorization string: {s}"),
             AuthorizationFmtError::Delta(s) => {
-                write!(f, "Invalid authorization delta string: {}", s)
+                write!(f, "Invalid authorization delta string: {s}")
             }
         }
     }
