@@ -10,12 +10,13 @@ use rpki::{
     repository::{
         aspa::Aspa, error::VerificationError, x509::Time, Cert, Crl, Manifest, ResourceCert, Roa,
     },
-    rrdp::{NotificationFile, Snapshot},
+    rrdp::{NotificationFile, Snapshot, UriAndHash},
     uri,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use uuid::Uuid;
 
-use crate::fetch::{FetchMode, Fetcher};
+use crate::fetch::{FetchMode, Fetcher, NotificationFileResponse};
 
 use super::{
     IgnoredObjectInfo, Tal, ValidatedAspa, ValidatedCaCertInfo, ValidatedCaCertificate,
@@ -465,50 +466,123 @@ impl VisitedRepositories {
         notify_uri: &uri::Https,
         local: Option<&LocalNotificationFile>,
     ) -> Result<Arc<RepositoryData>> {
-        let mut data = self.data.lock().unwrap();
-        if !data.contains_key(notify_uri) {
-            let fetcher = self.get_fetcher(notify_uri)?;
-            let notification = if let Some(local) = local {
-                if &local.uri == notify_uri {
-                    local.notification.clone()
-                } else {
-                    fetcher.read_notification_file(None)?.content()?.0
-                }
-            } else {
-                fetcher.read_notification_file(None)?.content()?.0
-            };
-
-            let snapshot_uri_hash = notification.snapshot();
-            let snapshot_source = fetcher.resolve_source(snapshot_uri_hash.uri())?;
-            let snapshot_data = snapshot_source
-                .fetch(Some(snapshot_uri_hash.hash()), None, None)?
-                .try_into_data()?;
-
-            let snapshot = Snapshot::parse(snapshot_data.as_ref()).with_context(|| {
-                format!("Cannot parse snapshot at uri: {}", snapshot_uri_hash.uri())
-            })?;
-
-            // let elements = snapshot.into_elements();
-            // for e in elements {
-            //     let (uri, bytes) = e.unpack();
-            // }
-
-            #[allow(clippy::mutable_key_type)]
-            let objects: HashMap<uri::Rsync, RepositoryObject> = snapshot
-                .into_elements()
-                .into_iter()
-                .map(|e| {
-                    let (uri, bytes) = e.unpack();
-                    (uri, RepositoryObject { bytes })
-                })
-                .collect();
-
-            data.insert(notify_uri.clone(), Arc::new(RepositoryData { objects }));
+        if !self.has_repository(notify_uri) {
+            self.retrieve_new_repository(notify_uri, local)?;
+        } else {
+            self.update_existing_repository(notify_uri, local)?;
         }
 
+        let data = self.data.lock().unwrap();
         data.get(notify_uri)
             .cloned()
             .ok_or(anyhow!("No data for repository at: {}", notify_uri))
+    }
+
+    fn has_repository(&self, notify_uri: &uri::Https) -> bool {
+        let data = self.data.lock().unwrap();
+        data.contains_key(notify_uri)
+    }
+
+    fn update_existing_repository(
+        &self,
+        notify_uri: &uri::Https,
+        local: Option<&LocalNotificationFile>,
+    ) -> Result<()> {
+        let mut data = self.data.lock().unwrap();
+        let fetcher = self.get_fetcher(notify_uri)?;
+
+        let repo_data = data
+            .get_mut(notify_uri)
+            .ok_or_else(|| anyhow!("No existing data for {}", notify_uri))?;
+
+        match self.read_notification_file(&fetcher, notify_uri, local, repo_data.etag.as_ref())? {
+            NotificationFileResponse::Unmodified => Ok(()),
+            NotificationFileResponse::Data { notification, etag } => {
+                // TODO: get from deltas
+                let repo_data = Self::repository_data_from_snapshot(notification, etag, &fetcher)?;
+                data.insert(notify_uri.clone(), Arc::new(repo_data));
+
+                Ok(())
+            }
+        }
+    }
+
+    fn retrieve_new_repository(
+        &self,
+        notify_uri: &uri::Https,
+        local: Option<&LocalNotificationFile>,
+    ) -> Result<()> {
+        let mut data = self.data.lock().unwrap();
+        let fetcher = self.get_fetcher(notify_uri)?;
+
+        let (notification, etag) = self
+            .read_notification_file(&fetcher, notify_uri, local, None)?
+            .content()?;
+
+        let repo_data = Self::repository_data_from_snapshot(notification, etag, &fetcher)?;
+
+        data.insert(notify_uri.clone(), Arc::new(repo_data));
+        Ok(())
+    }
+
+    fn repository_data_from_snapshot(
+        notification: NotificationFile,
+        etag: Option<String>,
+        fetcher: &Fetcher,
+    ) -> Result<RepositoryData> {
+        let serial = notification.serial();
+        let session_id = notification.session_id();
+
+        let snapshot_uri_hash = notification.snapshot();
+        let snapshot = Self::read_snapshot_file(&fetcher, snapshot_uri_hash)?;
+
+        #[allow(clippy::mutable_key_type)]
+        let objects: HashMap<uri::Rsync, RepositoryObject> = snapshot
+            .into_elements()
+            .into_iter()
+            .map(|e| {
+                let (uri, bytes) = e.unpack();
+                (uri, RepositoryObject { bytes })
+            })
+            .collect();
+
+        Ok(RepositoryData {
+            etag,
+            session_id,
+            serial,
+            objects,
+        })
+    }
+
+    fn read_notification_file(
+        &self,
+        fetcher: &Fetcher,
+        notify_uri: &uri::Https,
+        local: Option<&LocalNotificationFile>,
+        etag: Option<&String>,
+    ) -> Result<NotificationFileResponse> {
+        if let Some(local) = local {
+            if &local.uri == notify_uri {
+                Ok(NotificationFileResponse::Data {
+                    etag: None,
+                    notification: local.notification.clone(),
+                })
+            } else {
+                fetcher.read_notification_file(etag)
+            }
+        } else {
+            fetcher.read_notification_file(etag)
+        }
+    }
+
+    fn read_snapshot_file(fetcher: &Fetcher, snapshot_uri_hash: &UriAndHash) -> Result<Snapshot> {
+        let snapshot_source = fetcher.resolve_source(snapshot_uri_hash.uri())?;
+        let snapshot_data = snapshot_source
+            .fetch(Some(snapshot_uri_hash.hash()), None, None)?
+            .try_into_data()?;
+
+        Snapshot::parse(snapshot_data.as_ref())
+            .with_context(|| format!("Cannot parse snapshot at uri: {}", snapshot_uri_hash.uri()))
     }
 
     fn get_fetcher(&self, notify_uri: &uri::Https) -> Result<Arc<Fetcher>> {
@@ -532,6 +606,9 @@ pub struct RepositoryData {
     //       rather than getting the full snapshot.
     //       This only becomes relevant when we start using this from
     //       a daemon and/or persist this data between sync sessions.
+    etag: Option<String>,
+    session_id: Uuid,
+    serial: u64,
     objects: HashMap<uri::Rsync, RepositoryObject>,
 }
 
