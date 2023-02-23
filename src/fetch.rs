@@ -2,6 +2,7 @@ use std::{
     fmt::{self, Debug},
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -107,6 +108,7 @@ impl FetchSource {
                 let client = Client::builder()
                     .danger_accept_invalid_certs(mode.accept_insecure())
                     .danger_accept_invalid_hostnames(mode.accept_insecure())
+                    .timeout(Duration::from_secs(60))
                     .build()?;
 
                 let mut request_builder = client.get(uri.as_str());
