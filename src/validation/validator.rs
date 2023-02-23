@@ -108,6 +108,8 @@ impl Validator {
         local: Option<&LocalNotificationFile>,
         when: Time,
     ) -> ValidationReport {
+        let strict = false; // todo.. take this from config
+
         let mut report = ValidationReport::default();
         let mut ca_cert = ValidatedCaCertificate::empty(ca_cert_info.clone());
 
@@ -153,7 +155,7 @@ impl Validator {
                 }
             };
 
-            let mft = match Manifest::decode(mft_obj.bytes().clone(), true) {
+            let mft = match Manifest::decode(mft_obj.bytes().clone(), strict) {
                 Ok(mft) => mft,
                 Err(e) => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
@@ -165,7 +167,7 @@ impl Validator {
                 }
             };
 
-            let (mft_cert, content) = match mft.validate_at(resource_cert, true, when) {
+            let (mft_cert, content) = match mft.validate_at(resource_cert, strict, when) {
                 Ok((mft_cert, content)) => (mft_cert, content),
                 Err(e) => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
@@ -299,8 +301,8 @@ impl Validator {
                 };
 
                 match extension {
-                    "roa" => match Roa::decode(object.bytes().clone(), true) {
-                        Ok(roa) => match roa.process(resource_cert, true, |roa_cert| {
+                    "roa" => match Roa::decode(object.bytes().clone(), strict) {
+                        Ok(roa) => match roa.process(resource_cert, strict, |roa_cert| {
                             if crl.contains(roa_cert.serial_number()) {
                                 Err(VerificationError::new(format!("ROA at {uri} was revoked"))
                                     .into())
@@ -337,7 +339,8 @@ impl Validator {
                                             "certificate was revoked",
                                         ));
                                     } else {
-                                        match child_cert.validate_ca_at(resource_cert, true, when) {
+                                        match child_cert.validate_ca_at(resource_cert, strict, when)
+                                        {
                                             Ok(child_resource_cert) => {
                                                 match ValidatedCaCertInfo::try_from(
                                                     &child_resource_cert,
@@ -374,7 +377,8 @@ impl Validator {
                                     }
                                 } else {
                                     // This should be a BGPSec router (EE) certificate
-                                    match child_cert.validate_router_at(resource_cert, true, when) {
+                                    match child_cert.validate_router_at(resource_cert, strict, when)
+                                    {
                                         Ok(_) => {
                                             ca_cert.add_router_cert(ValidatedRouterCert::new(uri))
                                         }
@@ -397,7 +401,7 @@ impl Validator {
                             }
                         };
                     }
-                    "asa" => match Aspa::decode(object.bytes().clone(), true) {
+                    "asa" => match Aspa::decode(object.bytes().clone(), strict) {
                         Ok(aspa) => match aspa.process(resource_cert, true, |ee| {
                             if crl.contains(ee.serial_number()) {
                                 Err(VerificationError::new(format!("ROA at {uri} was revoked"))
