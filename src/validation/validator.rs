@@ -6,11 +6,12 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use log::debug;
 use rpki::{
     repository::{
         aspa::Aspa, error::VerificationError, x509::Time, Cert, Crl, Manifest, ResourceCert, Roa,
     },
-    rrdp::{NotificationFile, Snapshot, UriAndHash},
+    rrdp::{self, Delta, DeltaElement, NotificationFile, Snapshot},
     uri,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -128,7 +129,7 @@ impl Validator {
                 }
             };
 
-            let data = match self.repositories.update(sia_rrdp, local) {
+            let data = match self.repositories.get_latest(sia_rrdp, local) {
                 Ok(data) => data,
                 Err(e) => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
@@ -461,67 +462,198 @@ pub struct LocalNotificationFile {
 }
 
 impl VisitedRepositories {
-    fn update(
+    /// Gets the latest data for the given notify_uri.
+    ///
+    /// Will update local data if needed, or return existing data if
+    /// no update was needed.
+    fn get_latest(
         &self,
         notify_uri: &uri::Https,
         local: Option<&LocalNotificationFile>,
     ) -> Result<Arc<RepositoryData>> {
-        if !self.has_repository(notify_uri) {
-            self.retrieve_new_repository(notify_uri, local)?;
-        } else {
-            self.update_existing_repository(notify_uri, local)?;
+        let fetcher = self.get_fetcher(notify_uri)?;
+        let mut data = self.data.lock().unwrap();
+
+        match data.get_mut(notify_uri) {
+            None => {
+                // We did not have any data for this notify_uri, so add
+                // it now as a new repository.
+                let repo_data = self.retrieve_new_repository(notify_uri, &fetcher, local)?;
+                data.insert(notify_uri.clone(), Arc::new(repo_data));
+            }
+            Some(repo_data) => {
+                // Get the notification response to see if we need
+                // to update the data.
+                let notification_response = self.read_notification_file(
+                    &fetcher,
+                    notify_uri,
+                    local,
+                    repo_data.etag.as_ref(),
+                )?;
+
+                match notification_response {
+                    NotificationFileResponse::Unmodified => {
+                        // Nothing to update, proceed.
+                    }
+                    NotificationFileResponse::Data { notification, etag } => {
+                        // New notification file retrieved, or well... etag may not
+                        // have been supported, so check the session_id and serial
+                        // to be sure..
+                        if notification.session_id() == repo_data.session_id
+                            && notification.serial() == repo_data.serial
+                        {
+                            debug!("Notification file at uri {notify_uri} is unchanged (but does not support etag)");
+                        } else {
+                            // new notification.. let's try to apply deltas. If this does not work
+                            // for any reason, then try fall back to snapshot
+                            let repo_data = Arc::make_mut(repo_data);
+
+                            // Try to apply deltas. If this fails, then try to apply
+                            // the snapshot. If that also fails, then just remove the
+                            // data for this repository as we can't get the current
+                            // content. Note that this would point at a serious issue
+                            // with the publication server in question because it
+                            // would mean that it gave us a correct notification file,
+                            // but can't give the correct snapshot on that file.
+                            match Self::update_repository_data_from_deltas(
+                                notification.clone(),
+                                etag.clone(),
+                                repo_data,
+                                &fetcher,
+                            ) {
+                                Ok(()) => {
+                                    let arc = Arc::new(repo_data.clone());
+                                    data.insert(notify_uri.clone(), arc);
+                                }
+                                Err(e) => {
+                                    debug!("Could not apply delta for {notify_uri}, will try snapshot. Reason: {e}");
+                                    match Self::repository_data_from_snapshot(
+                                        notification,
+                                        etag,
+                                        &fetcher,
+                                    ) {
+                                        Ok(repo_data) => {
+                                            data.insert(notify_uri.clone(), Arc::new(repo_data));
+                                        }
+                                        Err(e) => {
+                                            debug!("Could not apply snapshot for {notify_uri}, will remove content. Reason: {e}");
+                                            data.remove(notify_uri);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        let data = self.data.lock().unwrap();
         data.get(notify_uri)
             .cloned()
             .ok_or(anyhow!("No data for repository at: {}", notify_uri))
     }
 
-    fn has_repository(&self, notify_uri: &uri::Https) -> bool {
-        let data = self.data.lock().unwrap();
-        data.contains_key(notify_uri)
-    }
-
-    fn update_existing_repository(
-        &self,
-        notify_uri: &uri::Https,
-        local: Option<&LocalNotificationFile>,
-    ) -> Result<()> {
-        let mut data = self.data.lock().unwrap();
-        let fetcher = self.get_fetcher(notify_uri)?;
-
-        let repo_data = data
-            .get_mut(notify_uri)
-            .ok_or_else(|| anyhow!("No existing data for {}", notify_uri))?;
-
-        match self.read_notification_file(&fetcher, notify_uri, local, repo_data.etag.as_ref())? {
-            NotificationFileResponse::Unmodified => Ok(()),
-            NotificationFileResponse::Data { notification, etag } => {
-                // TODO: get from deltas
-                let repo_data = Self::repository_data_from_snapshot(notification, etag, &fetcher)?;
-                data.insert(notify_uri.clone(), Arc::new(repo_data));
-
-                Ok(())
-            }
-        }
-    }
-
     fn retrieve_new_repository(
         &self,
         notify_uri: &uri::Https,
+        fetcher: &Fetcher,
         local: Option<&LocalNotificationFile>,
-    ) -> Result<()> {
-        let mut data = self.data.lock().unwrap();
-        let fetcher = self.get_fetcher(notify_uri)?;
-
+    ) -> Result<RepositoryData> {
         let (notification, etag) = self
-            .read_notification_file(&fetcher, notify_uri, local, None)?
+            .read_notification_file(fetcher, notify_uri, local, None)?
             .content()?;
 
-        let repo_data = Self::repository_data_from_snapshot(notification, etag, &fetcher)?;
+        Self::repository_data_from_snapshot(notification, etag, fetcher)
+    }
 
-        data.insert(notify_uri.clone(), Arc::new(repo_data));
+    /// Try to update the given repository data based on deltas.
+    ///
+    /// Returns an error in case this fails, e.g. because there not all applicable deltas
+    /// available. Note that if this fails because one of the deltas can not be retrieved
+    /// or applied for some some reason, then the repository data will still be modified.
+    ///
+    /// In short.. if this fails, fall back to a full re-sync based on the latest snapshot
+    /// and discard the existing repository data.
+    fn update_repository_data_from_deltas(
+        mut notification: NotificationFile,
+        etag: Option<String>,
+        data: &mut RepositoryData,
+        fetcher: &Fetcher,
+    ) -> Result<()> {
+        // Check that the session matches our data. If not we should error out
+        // so that a full re-sync is done.
+        if notification.session_id() != data.session_id {
+            return Err(anyhow!("session changed, cannot apply deltas"));
+        }
+
+        // Sort the deltas from low to high and check if the sequence
+        // contains no gaps.
+        if !notification.sort_and_verify_deltas(None) {
+            return Err(anyhow!("there seem to be gaps in the deltas"));
+        }
+
+        // Ensure there ARE deltas
+        let first_delta = notification
+            .deltas()
+            .first()
+            .ok_or(anyhow!("notification file has no deltas"))?;
+
+        // Ensure that we have all deltas needed for our
+        // current data serial.
+        if first_delta.serial() > data.serial + 1 {
+            return Err(anyhow!(
+                "no delta path from {} to {}",
+                data.serial,
+                notification.serial()
+            ));
+        }
+
+        // Retrieve and apply deltas
+        for delta_info in notification.deltas() {
+            let delta = Self::read_delta_file(fetcher, delta_info.uri(), delta_info.hash())?;
+            for element in delta.into_elements() {
+                match element {
+                    DeltaElement::Publish(publish) => {
+                        let (uri, bytes) = publish.unpack();
+                        data.objects.insert(uri, bytes.into());
+                    }
+                    DeltaElement::Update(update) => {
+                        let (uri, hash, bytes) = update.unpack();
+                        let existing = data
+                            .objects
+                            .get(&uri)
+                            .ok_or(anyhow!("no object to update at {uri}"))?;
+
+                        if !hash.matches(existing.bytes().as_ref()) {
+                            return Err(anyhow!(
+                                "existing object at {uri} does not match update hash"
+                            ));
+                        }
+
+                        data.objects.insert(uri, bytes.into());
+                    }
+                    DeltaElement::Withdraw(withdraw) => {
+                        let (uri, hash) = withdraw.unpack();
+                        let existing = data
+                            .objects
+                            .get(&uri)
+                            .ok_or(anyhow!("no object to withdraw at {uri}"))?;
+
+                        if !hash.matches(existing.bytes().as_ref()) {
+                            return Err(anyhow!(
+                                "existing object at {uri} does not match withdraw hash"
+                            ));
+                        }
+
+                        data.objects.remove(&uri);
+                    }
+                }
+            }
+        }
+
+        data.serial = notification.serial();
+        data.etag = etag;
+
         Ok(())
     }
 
@@ -534,7 +666,9 @@ impl VisitedRepositories {
         let session_id = notification.session_id();
 
         let snapshot_uri_hash = notification.snapshot();
-        let snapshot = Self::read_snapshot_file(&fetcher, snapshot_uri_hash)?;
+        let uri = snapshot_uri_hash.uri();
+        let hash = snapshot_uri_hash.hash();
+        let snapshot = Self::read_snapshot_file(fetcher, uri, hash)?;
 
         #[allow(clippy::mutable_key_type)]
         let objects: HashMap<uri::Rsync, RepositoryObject> = snapshot
@@ -575,14 +709,24 @@ impl VisitedRepositories {
         }
     }
 
-    fn read_snapshot_file(fetcher: &Fetcher, snapshot_uri_hash: &UriAndHash) -> Result<Snapshot> {
-        let snapshot_source = fetcher.resolve_source(snapshot_uri_hash.uri())?;
-        let snapshot_data = snapshot_source
-            .fetch(Some(snapshot_uri_hash.hash()), None, None)?
-            .try_into_data()?;
+    fn read_delta_file(fetcher: &Fetcher, uri: &uri::Https, hash: rrdp::Hash) -> Result<Delta> {
+        let data = Self::read_bytes(fetcher, uri, hash)?;
+        Delta::parse(data.as_ref()).with_context(|| format!("Cannot parse delta at uri: {uri}"))
+    }
 
-        Snapshot::parse(snapshot_data.as_ref())
-            .with_context(|| format!("Cannot parse snapshot at uri: {}", snapshot_uri_hash.uri()))
+    fn read_snapshot_file(
+        fetcher: &Fetcher,
+        uri: &uri::Https,
+        hash: rrdp::Hash,
+    ) -> Result<Snapshot> {
+        let data = Self::read_bytes(fetcher, uri, hash)?;
+        Snapshot::parse(data.as_ref())
+            .with_context(|| format!("Cannot parse snapshot at uri: {uri}"))
+    }
+
+    fn read_bytes(fetcher: &Fetcher, uri: &uri::Https, hash: rrdp::Hash) -> Result<Bytes> {
+        let source = fetcher.resolve_source(uri)?;
+        source.fetch(Some(hash), None, None)?.try_into_data()
     }
 
     fn get_fetcher(&self, notify_uri: &uri::Https) -> Result<Arc<Fetcher>> {
@@ -621,6 +765,12 @@ pub struct RepositoryObject {
 impl RepositoryObject {
     pub fn bytes(&self) -> &Bytes {
         &self.bytes
+    }
+}
+
+impl From<Bytes> for RepositoryObject {
+    fn from(bytes: Bytes) -> Self {
+        RepositoryObject { bytes }
     }
 }
 
