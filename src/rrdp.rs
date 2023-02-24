@@ -100,7 +100,7 @@ impl RrdpState {
     pub fn update(&mut self, limit: Option<usize>, fetcher: &Fetcher) -> Result<bool> {
         match self.notification_source.fetch(fetcher)? {
             None => {
-                debug!("Notification file was not changed, no updated needed.");
+                debug!("Notification file at source to sync was not changed, no updated needed.");
                 Ok(false)
             }
             Some(mut notification) => {

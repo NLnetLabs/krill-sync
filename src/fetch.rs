@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use log::info;
 use reqwest::{
     blocking::Client,
     header::{ETAG, IF_NONE_MATCH, USER_AGENT},
@@ -101,10 +102,9 @@ impl FetchSource {
         // we would need to build up the hash as we are writing the file
         // for later checking, and then we should remove the file again if
         // the hash did not match.
-        // Since the source files are trusted there should be no big deal
-        // in keeping them temporarily in memory.
         let fetch_response = match self {
             FetchSource::Uri(uri, mode) => {
+                info!("Retrieving file: {uri}");
                 let client = Client::builder()
                     .danger_accept_invalid_certs(mode.accept_insecure())
                     .danger_accept_invalid_hostnames(mode.accept_insecure())
@@ -174,6 +174,7 @@ impl FetchSource {
 
         if let Some(target_file) = target_file {
             if let FetchResponse::Data { bytes, .. } = &fetch_response {
+                info!("Writing file to: {}", target_file.to_string_lossy());
                 file_ops::write_buf(target_file, bytes)?;
                 Ok(FetchResponse::Saved)
             } else {
