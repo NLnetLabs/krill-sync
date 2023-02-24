@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use log::{debug, trace};
+use log::{info, trace};
 use rpki::{
     repository::{
         aspa::Aspa, error::VerificationError, x509::Time, Cert, Crl, Manifest, ResourceCert, Roa,
@@ -516,6 +516,7 @@ impl VisitedRepositories {
                             {
                                 trace!("Notification file at uri {notify_uri} is unchanged (but does not support etag)");
                             } else {
+                                info!("Notification file at uri {notify_uri} was updated, will try to apply deltas");
                                 // new notification.. let's try to apply deltas. If this does not work
                                 // for any reason, then try fall back to snapshot
                                 let repo_data = Arc::make_mut(repo_data);
@@ -539,7 +540,7 @@ impl VisitedRepositories {
                                         data.insert(notify_uri.clone(), arc);
                                     }
                                     Err(e) => {
-                                        debug!("Could not apply delta for {notify_uri}, will try snapshot. Reason: {e}");
+                                        info!("Could not apply delta for {notify_uri}, will try snapshot. Reason: {e}");
                                         match Self::repository_data_from_snapshot(
                                             notification,
                                             etag,
@@ -553,7 +554,7 @@ impl VisitedRepositories {
                                                 );
                                             }
                                             Err(e) => {
-                                                debug!("Could not apply snapshot for {notify_uri}, will remove content. Reason: {e}");
+                                                info!("Could not apply snapshot for {notify_uri}, will remove content. Reason: {e}");
                                                 data.remove(notify_uri);
                                             }
                                         }
