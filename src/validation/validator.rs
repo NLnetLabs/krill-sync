@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use log::{info, trace};
+use log::{debug, info, trace, warn};
 use rpki::{
     repository::{
         aspa::Aspa, error::VerificationError, x509::Time, Cert, Crl, Manifest, ResourceCert, Roa,
@@ -485,8 +485,16 @@ impl VisitedRepositories {
                 // We did not have any data for this notify_uri, so add
                 // it now as a new repository.
                 info!("New repository found. Will sync data for {notify_uri}");
-                let repo_data = self.retrieve_new_repository(notify_uri, &fetcher, local, when)?;
-                data.insert(notify_uri.clone(), Arc::new(repo_data));
+                match self.retrieve_new_repository(notify_uri, &fetcher, local, when) {
+                    Ok(repo_data) => {
+                        debug!("Save repository data for {notify_uri}");
+                        data.insert(notify_uri.clone(), Arc::new(repo_data));
+                    }
+                    Err(e) => {
+                        warn!("Could not update repository for {notify_uri}. Error: {e}");
+                        return Err(e);
+                    }
+                }
             }
             Some(repo_data) => {
                 // Ensure we don't try to fetch the same notify.xml if we

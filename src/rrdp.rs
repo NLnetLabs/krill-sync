@@ -325,6 +325,7 @@ impl RrdpState {
 
     /// Persist the RRDP state to disk (as json)
     pub fn persist(&self, path: &Path) -> Result<()> {
+        debug!("Saving RRDP state to disk");
         let json = serde_json::to_string_pretty(&self)?;
 
         file_ops::write_buf(path, json.as_bytes())
