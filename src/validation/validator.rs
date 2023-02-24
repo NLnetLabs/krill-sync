@@ -641,48 +641,54 @@ impl VisitedRepositories {
 
         // Retrieve and apply deltas
         for delta_info in notification.deltas() {
-            let delta = Self::read_delta_file(fetcher, delta_info.uri(), delta_info.hash())?;
-            for element in delta.into_elements() {
-                match element {
-                    DeltaElement::Publish(publish) => {
-                        let (uri, bytes) = publish.unpack();
-                        data.objects.insert(uri, bytes.into());
-                    }
-                    DeltaElement::Update(update) => {
-                        let (uri, hash, bytes) = update.unpack();
-                        let existing = data
-                            .objects
-                            .get(&uri)
-                            .ok_or(anyhow!("no object to update at {uri}"))?;
-
-                        if !hash.matches(existing.bytes().as_ref()) {
-                            return Err(anyhow!(
-                                "existing object at {uri} does not match update hash"
-                            ));
+            if delta_info.serial() != data.serial + 1 {
+                // skip deltas that are already processed.
+                continue;
+            } else {
+                let delta = Self::read_delta_file(fetcher, delta_info.uri(), delta_info.hash())?;
+                for element in delta.into_elements() {
+                    match element {
+                        DeltaElement::Publish(publish) => {
+                            let (uri, bytes) = publish.unpack();
+                            data.objects.insert(uri, bytes.into());
                         }
+                        DeltaElement::Update(update) => {
+                            let (uri, hash, bytes) = update.unpack();
+                            let existing = data
+                                .objects
+                                .get(&uri)
+                                .ok_or(anyhow!(format!("no object to update at {uri}")))?;
 
-                        data.objects.insert(uri, bytes.into());
-                    }
-                    DeltaElement::Withdraw(withdraw) => {
-                        let (uri, hash) = withdraw.unpack();
-                        let existing = data
-                            .objects
-                            .get(&uri)
-                            .ok_or(anyhow!("no object to withdraw at {uri}"))?;
+                            if !hash.matches(existing.bytes().as_ref()) {
+                                return Err(anyhow!(format!(
+                                    "existing object at {uri} does not match update hash"
+                                )));
+                            }
 
-                        if !hash.matches(existing.bytes().as_ref()) {
-                            return Err(anyhow!(
-                                "existing object at {uri} does not match withdraw hash"
-                            ));
+                            data.objects.insert(uri, bytes.into());
                         }
+                        DeltaElement::Withdraw(withdraw) => {
+                            let (uri, hash) = withdraw.unpack();
+                            let existing = data
+                                .objects
+                                .get(&uri)
+                                .ok_or(anyhow!(format!("no object to withdraw at {uri}")))?;
 
-                        data.objects.remove(&uri);
+                            if !hash.matches(existing.bytes().as_ref()) {
+                                return Err(anyhow!(format!(
+                                    "existing object at {uri} does not match withdraw hash"
+                                )));
+                            }
+
+                            data.objects.remove(&uri);
+                        }
                     }
                 }
+
+                data.serial += 1;
             }
         }
 
-        data.serial = notification.serial();
         data.etag = etag;
         data.last_fetch = when;
 
