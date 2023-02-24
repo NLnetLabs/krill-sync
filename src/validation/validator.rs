@@ -81,6 +81,7 @@ impl Validator {
         let mut report = ValidationReport::default();
 
         for tal in &self.tals {
+            info!("Validate TA {}", tal.name());
             report.add_other(self.validate_ta_at(tal, local, when)?);
         }
 
@@ -483,6 +484,7 @@ impl VisitedRepositories {
             None => {
                 // We did not have any data for this notify_uri, so add
                 // it now as a new repository.
+                info!("New repository found. Will sync data for {notify_uri}");
                 let repo_data = self.retrieve_new_repository(notify_uri, &fetcher, local, when)?;
                 data.insert(notify_uri.clone(), Arc::new(repo_data));
             }

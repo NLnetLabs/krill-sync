@@ -251,7 +251,10 @@ impl RrdpState {
         } else {
             let validator = Self::create_validator(config)?;
             if self.new_validator_needed(&validator) {
+                debug!("Using new validator instance.");
                 self.validator = Some(validator);
+            } else {
+                debug!("Re-using existing validator instance.")
             }
         }
         Ok(())
@@ -291,7 +294,7 @@ impl RrdpState {
     fn new_validator_needed(&self, new_validator: &Validator) -> bool {
         self.validator
             .as_ref()
-            .map(|existing| existing.equivalent(new_validator))
+            .map(|existing| !existing.equivalent(new_validator))
             .unwrap_or(true)
     }
 

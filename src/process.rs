@@ -34,25 +34,22 @@ pub fn process(config: &Config) -> Result<()> {
     let changed = rrdp_state.update(config.rrdp_max_deltas, &config.fetcher())?;
 
     // ===================================================================
-    // Pre-validate if there were any changes.
+    // Validate if configured with tals.
     // ===================================================================
     //
-    // If there were any changes, then pre-validate the newly written snapshot
-    // and delta files. If there are no validation issues we proceed without
-    // further comments. If there were issues then dependent on the
-    // configuration either just warn about these issues and continue (default),
-    // or reject the new files and exit with an error.
+    // Pre-validate the snapshot and delta files for the source repository.
+    // Validation is done even if there were no changes, so that we can
+    // continue to monitor the validation state.
     //
-    // If we exit here, we will leave the new snapshot and delta files in
-    // place as this may help in debugging. This does not affect relying
-    // parties because the notification file was not yet updated.
+    // If there were issues then dependent on the configuration either just
+    // warn about these issues and continue (default), or exit with an error.
     //
-    // Because the updated RrdpState is not persisted these files would be
-    // downloaded again in case krill-sync runs again.
+    // If we exit here, we will leave the snapshot and delta files in place.
+    // In case there were any changes then exiting here will ensure that
+    // the new notification file is not updated. And as a result Relying
+    // Parties will not see the new files with potential issues.
     // ===================================================================
-    // if changed {
     rrdp_state.pre_validate(config)?;
-    // }
 
     // Clean up any RRDP files and empty parent directories if they had been
     // deprecated for more than the configured 'cleanup_after' time.

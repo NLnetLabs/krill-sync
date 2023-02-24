@@ -81,6 +81,10 @@ impl Tal {
             Ok(cert)
         }
     }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[cfg(test)]
