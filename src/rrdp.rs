@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -161,13 +161,14 @@ impl RrdpState {
     pub fn pre_validate(&mut self, config: &Config) -> Result<()> {
         self.reconfigure_validator(config)?;
 
-        let candidate_notification = self.make_notification_file()?;
-        let local = LocalNotificationFile {
-            uri: config.notification_uri.clone(),
-            notification: candidate_notification,
-        };
-
         if let Some(validator) = self.validator.as_ref() {
+            info!("Validate using configured TALs and report on source repository");
+            let candidate_notification = self.make_notification_file()?;
+            let local = LocalNotificationFile {
+                uri: config.notification_uri.clone(),
+                notification: candidate_notification,
+            };
+
             let report = validator.validate(Some(&local))?;
 
             if let Some(rrdp_report) = report.rrdp_repositories.get(&config.notification_uri) {
@@ -221,6 +222,7 @@ impl RrdpState {
                 Ok(())
             }
         } else {
+            trace!("Skipping validation, no TALs were configured.");
             Ok(())
         }
     }

@@ -50,9 +50,9 @@ pub fn process(config: &Config) -> Result<()> {
     // Because the updated RrdpState is not persisted these files would be
     // downloaded again in case krill-sync runs again.
     // ===================================================================
-    if changed {
-        rrdp_state.pre_validate(config)?;
-    }
+    // if changed {
+    rrdp_state.pre_validate(config)?;
+    // }
 
     // Clean up any RRDP files and empty parent directories if they had been
     // deprecated for more than the configured 'cleanup_after' time.
