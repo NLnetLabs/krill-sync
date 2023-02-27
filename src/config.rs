@@ -128,6 +128,9 @@ pub struct Config {
 
     // Validation support
     /// Optional TAL file(s) used to warn about, or reject, invalid content.
+    /// NOTE: if you use this as the last option, be sure to add '--' to avoid
+    /// that the <notification-uri> argument is interpreted as an additional
+    /// TAL file location.
     #[structopt(long = "tal", value_name = "tal file", parse(from_os_str))]
     pub tal_files: Vec<PathBuf>,
 
