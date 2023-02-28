@@ -451,7 +451,7 @@ impl Validator {
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct VisitedRepositories {
     fetchers: HashMap<uri::Https, Arc<Fetcher>>,
-    data: HashMap<uri::Https, Arc<RepositoryData>>,
+    data: HashMap<uri::Https, RepositoryData>,
 }
 
 #[derive(Clone, Debug)]
@@ -470,7 +470,7 @@ impl VisitedRepositories {
         notify_uri: &uri::Https,
         local: Option<&LocalNotificationFile>,
         when: Time,
-    ) -> Result<Arc<RepositoryData>> {
+    ) -> Result<&RepositoryData> {
         let fetcher = self.get_fetcher(notify_uri);
 
         match self.data.get_mut(notify_uri) {
@@ -481,7 +481,7 @@ impl VisitedRepositories {
                 match Self::retrieve_new_repository(notify_uri, &fetcher, local, when) {
                     Ok(repo_data) => {
                         debug!("Save repository data for {notify_uri}");
-                        self.data.insert(notify_uri.clone(), Arc::new(repo_data));
+                        self.data.insert(notify_uri.clone(), repo_data);
                     }
                     Err(e) => {
                         warn!("Could not update repository for {notify_uri}. Error: {e}");
@@ -517,10 +517,6 @@ impl VisitedRepositories {
                                 trace!("Notification file at uri {notify_uri} is unchanged (but does not support etag)");
                             } else {
                                 info!("Notification file at uri {notify_uri} was updated, will try to apply deltas");
-                                // new notification.. let's try to apply deltas. If this does not work
-                                // for any reason, then try fall back to snapshot
-                                let repo_data = Arc::make_mut(repo_data);
-
                                 // Try to apply deltas. If this fails, then try to apply
                                 // the snapshot. If that also fails, then just remove the
                                 // data for this repository as we can't get the current
@@ -528,35 +524,26 @@ impl VisitedRepositories {
                                 // with the publication server in question because it
                                 // would mean that it gave us a correct notification file,
                                 // but can't give the correct snapshot on that file.
-                                match Self::update_repository_data_from_deltas(
+                                if let Err(e) = Self::update_repository_data_from_deltas(
                                     notification.clone(),
                                     etag.clone(),
                                     repo_data,
                                     &fetcher,
                                     when,
                                 ) {
-                                    Ok(()) => {
-                                        let arc = Arc::new(repo_data.clone());
-                                        self.data.insert(notify_uri.clone(), arc);
-                                    }
-                                    Err(e) => {
-                                        info!("Could not apply delta for {notify_uri}, will try snapshot. Reason: {e}");
-                                        match Self::repository_data_from_snapshot(
-                                            notification,
-                                            etag,
-                                            &fetcher,
-                                            when,
-                                        ) {
-                                            Ok(repo_data) => {
-                                                self.data.insert(
-                                                    notify_uri.clone(),
-                                                    Arc::new(repo_data),
-                                                );
-                                            }
-                                            Err(e) => {
-                                                info!("Could not apply snapshot for {notify_uri}, will remove content. Reason: {e}");
-                                                self.data.remove(notify_uri);
-                                            }
+                                    info!("Could not apply delta for {notify_uri}, will try snapshot. Reason: {e}");
+                                    match Self::repository_data_from_snapshot(
+                                        notification,
+                                        etag,
+                                        &fetcher,
+                                        when,
+                                    ) {
+                                        Ok(repo_data) => {
+                                            self.data.insert(notify_uri.clone(), repo_data);
+                                        }
+                                        Err(e) => {
+                                            info!("Could not apply snapshot for {notify_uri}, will remove content. Reason: {e}");
+                                            self.data.remove(notify_uri);
                                         }
                                     }
                                 }
@@ -569,7 +556,6 @@ impl VisitedRepositories {
 
         self.data
             .get(notify_uri)
-            .cloned()
             .ok_or(anyhow!("No data for repository at: {}", notify_uri))
     }
 
