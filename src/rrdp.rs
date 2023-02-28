@@ -161,9 +161,10 @@ impl RrdpState {
     pub fn pre_validate(&mut self, config: &Config) -> Result<()> {
         self.reconfigure_validator(config)?;
 
-        if let Some(validator) = self.validator.as_ref() {
+        let candidate_notification = self.make_notification_file()?;
+
+        if let Some(validator) = self.validator.as_mut() {
             info!("Validate using configured TALs and report on source repository");
-            let candidate_notification = self.make_notification_file()?;
             let local = LocalNotificationFile {
                 uri: config.notification_uri.clone(),
                 notification: candidate_notification,

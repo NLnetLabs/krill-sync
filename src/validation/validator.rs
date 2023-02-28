@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    convert::TryFrom,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, convert::TryFrom, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
@@ -35,13 +31,11 @@ impl Validator {
         Validator {
             tals,
             repositories: VisitedRepositories {
-                fetchers: Mutex::new(
-                    fetchers
-                        .into_iter()
-                        .map(|fetcher| (fetcher.notification_uri().clone(), Arc::new(fetcher)))
-                        .collect(),
-                ),
-                data: Mutex::new(HashMap::new()),
+                fetchers: fetchers
+                    .into_iter()
+                    .map(|fetcher| (fetcher.notification_uri().clone(), Arc::new(fetcher)))
+                    .collect(),
+                data: HashMap::new(),
             },
         }
     }
@@ -54,8 +48,8 @@ impl Validator {
     /// is not *equal* because it may include other repository fetchers
     /// and it would have downloaded repository data.
     pub fn equivalent(&self, other: &Validator) -> bool {
-        let self_repositories = self.repositories.fetchers.lock().unwrap();
-        let other_repositories = other.repositories.fetchers.lock().unwrap();
+        let self_repositories = &self.repositories.fetchers;
+        let other_repositories = &other.repositories.fetchers;
 
         for other_repo in other_repositories.values() {
             if !self_repositories
@@ -69,27 +63,27 @@ impl Validator {
         self.tals == other.tals
     }
 
-    pub fn validate(&self, local: Option<&LocalNotificationFile>) -> Result<ValidationReport> {
+    pub fn validate(&mut self, local: Option<&LocalNotificationFile>) -> Result<ValidationReport> {
         self.validate_at(local, Time::now())
     }
 
     pub fn validate_at(
-        &self,
+        &mut self,
         local: Option<&LocalNotificationFile>,
         when: Time,
     ) -> Result<ValidationReport> {
         let mut report = ValidationReport::default();
 
-        for tal in &self.tals {
+        for tal in self.tals.clone() {
             info!("Validate TA {}", tal.name());
-            report.add_other(self.validate_ta_at(tal, local, when)?);
+            report.add_other(self.validate_ta_at(&tal, local, when)?);
         }
 
         Ok(report)
     }
 
     pub fn validate_ta_at(
-        &self,
+        &mut self,
         tal: &Tal,
         local: Option<&LocalNotificationFile>,
         when: Time,
@@ -103,7 +97,7 @@ impl Validator {
     }
 
     fn validate_tree_at(
-        &self,
+        &mut self,
         resource_cert: &ResourceCert,
         ca_cert_info: &ValidatedCaCertInfo,
         local: Option<&LocalNotificationFile>,
@@ -456,8 +450,8 @@ impl Validator {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct VisitedRepositories {
-    fetchers: Mutex<HashMap<uri::Https, Arc<Fetcher>>>,
-    data: Mutex<HashMap<uri::Https, Arc<RepositoryData>>>,
+    fetchers: HashMap<uri::Https, Arc<Fetcher>>,
+    data: HashMap<uri::Https, Arc<RepositoryData>>,
 }
 
 #[derive(Clone, Debug)]
@@ -472,23 +466,22 @@ impl VisitedRepositories {
     /// Will update local data if needed, or return existing data if
     /// no update was needed.
     fn get_latest(
-        &self,
+        &mut self,
         notify_uri: &uri::Https,
         local: Option<&LocalNotificationFile>,
         when: Time,
     ) -> Result<Arc<RepositoryData>> {
-        let fetcher = self.get_fetcher(notify_uri)?;
-        let mut data = self.data.lock().unwrap();
+        let fetcher = self.get_fetcher(notify_uri);
 
-        match data.get_mut(notify_uri) {
+        match self.data.get_mut(notify_uri) {
             None => {
                 // We did not have any data for this notify_uri, so add
                 // it now as a new repository.
                 info!("New repository found. Will sync data for {notify_uri}");
-                match self.retrieve_new_repository(notify_uri, &fetcher, local, when) {
+                match Self::retrieve_new_repository(notify_uri, &fetcher, local, when) {
                     Ok(repo_data) => {
                         debug!("Save repository data for {notify_uri}");
-                        data.insert(notify_uri.clone(), Arc::new(repo_data));
+                        self.data.insert(notify_uri.clone(), Arc::new(repo_data));
                     }
                     Err(e) => {
                         warn!("Could not update repository for {notify_uri}. Error: {e}");
@@ -498,20 +491,17 @@ impl VisitedRepositories {
             }
             Some(repo_data) => {
                 // Ensure we don't try to fetch the same notify.xml if we
-                // already updated it within the last 5 minutes.
+                // already updated it in this run, or within the last 5 minutes.
                 //
                 // TODO: make this time configurable.
-                if repo_data.last_fetch > Time::five_minutes_ago() {
+                if repo_data.fetched || repo_data.last_fetch > Time::five_minutes_ago() {
                     trace!("Won't check {notify_uri} as it was checked in the last 5 minutes")
                 } else {
                     // Get the notification response to see if we need
                     // to update the data.
-                    let notification_response = self.read_notification_file(
-                        &fetcher,
-                        notify_uri,
-                        local,
-                        repo_data.etag.as_ref(),
-                    )?;
+                    let etag = repo_data.etag.clone();
+                    let notification_response =
+                        Self::read_notification_file(&fetcher, notify_uri, local, etag.as_ref())?;
 
                     match notification_response {
                         NotificationFileResponse::Unmodified => {
@@ -547,7 +537,7 @@ impl VisitedRepositories {
                                 ) {
                                     Ok(()) => {
                                         let arc = Arc::new(repo_data.clone());
-                                        data.insert(notify_uri.clone(), arc);
+                                        self.data.insert(notify_uri.clone(), arc);
                                     }
                                     Err(e) => {
                                         info!("Could not apply delta for {notify_uri}, will try snapshot. Reason: {e}");
@@ -558,14 +548,14 @@ impl VisitedRepositories {
                                             when,
                                         ) {
                                             Ok(repo_data) => {
-                                                data.insert(
+                                                self.data.insert(
                                                     notify_uri.clone(),
                                                     Arc::new(repo_data),
                                                 );
                                             }
                                             Err(e) => {
                                                 info!("Could not apply snapshot for {notify_uri}, will remove content. Reason: {e}");
-                                                data.remove(notify_uri);
+                                                self.data.remove(notify_uri);
                                             }
                                         }
                                     }
@@ -577,21 +567,20 @@ impl VisitedRepositories {
             }
         }
 
-        data.get(notify_uri)
+        self.data
+            .get(notify_uri)
             .cloned()
             .ok_or(anyhow!("No data for repository at: {}", notify_uri))
     }
 
     fn retrieve_new_repository(
-        &self,
         notify_uri: &uri::Https,
         fetcher: &Fetcher,
         local: Option<&LocalNotificationFile>,
         when: Time,
     ) -> Result<RepositoryData> {
-        let (notification, etag) = self
-            .read_notification_file(fetcher, notify_uri, local, None)?
-            .content()?;
+        let (notification, etag) =
+            Self::read_notification_file(fetcher, notify_uri, local, None)?.content()?;
 
         Self::repository_data_from_snapshot(notification, etag, fetcher, when)
     }
@@ -691,6 +680,7 @@ impl VisitedRepositories {
 
         data.etag = etag;
         data.last_fetch = when;
+        data.fetched = true;
 
         Ok(())
     }
@@ -722,6 +712,7 @@ impl VisitedRepositories {
         Ok(RepositoryData {
             etag,
             last_fetch: when,
+            fetched: true,
             session_id,
             serial,
             objects,
@@ -729,7 +720,6 @@ impl VisitedRepositories {
     }
 
     fn read_notification_file(
-        &self,
         fetcher: &Fetcher,
         notify_uri: &uri::Https,
         local: Option<&LocalNotificationFile>,
@@ -769,18 +759,10 @@ impl VisitedRepositories {
         source.fetch(Some(hash), None, None)?.try_into_data()
     }
 
-    fn get_fetcher(&self, notify_uri: &uri::Https) -> Result<Arc<Fetcher>> {
-        let mut fetchers = self.fetchers.lock().unwrap();
-
-        if !fetchers.contains_key(notify_uri) {
-            let fetcher = Fetcher::new(notify_uri.clone(), None, FetchMode::Insecure);
-            fetchers.insert(notify_uri.clone(), Arc::new(fetcher));
-        }
-
-        fetchers
-            .get(notify_uri)
-            .cloned()
-            .ok_or(anyhow!("No fetcher for repository at: {}", notify_uri))
+    fn get_fetcher(&self, notify_uri: &uri::Https) -> Arc<Fetcher> {
+        self.fetchers.get(notify_uri).cloned().unwrap_or_else(|| {
+            Arc::new(Fetcher::new(notify_uri.clone(), None, FetchMode::Insecure))
+        })
     }
 }
 
@@ -794,6 +776,10 @@ pub struct RepositoryData {
     // cool-down before even attempting to check for an
     // updated notify.xml.
     last_fetch: Time,
+
+    #[serde(skip_serializing, default)]
+    fetched: bool,
+
     session_id: Uuid,
     serial: u64,
     objects: HashMap<uri::Rsync, RepositoryObject>,
@@ -860,7 +846,7 @@ mod tests {
         );
         let fetcher = Fetcher::new(notification_uri, Some(fetch_map), FetchMode::Insecure);
 
-        let validator = Validator::new(vec![tal], vec![fetcher]);
+        let mut validator = Validator::new(vec![tal], vec![fetcher]);
 
         validator
             .validate_at(None, Time::utc(2023, 2, 13, 15, 58, 00))
