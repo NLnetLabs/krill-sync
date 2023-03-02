@@ -604,7 +604,7 @@ impl VisitedRepositories {
                             {
                                 trace!("Notification file at uri {notify_uri} is unchanged (but does not support etag)");
                             } else {
-                                info!("Notification file at uri {notify_uri} was updated, will try to apply deltas");
+                                debug!("Notification file at uri {notify_uri} was updated, will try to apply deltas");
                                 // Try to apply deltas. If this fails, then try to apply
                                 // the snapshot. If that also fails, then just remove the
                                 // data for this repository as we can't get the current
@@ -619,7 +619,7 @@ impl VisitedRepositories {
                                     &fetcher,
                                     when,
                                 ) {
-                                    info!("Could not apply delta for {notify_uri}, will try snapshot. Reason: {e}");
+                                    debug!("Could not apply delta for {notify_uri}, will try snapshot. Reason: {e}");
                                     match Self::repository_data_from_snapshot(
                                         notification,
                                         etag,
@@ -627,13 +627,18 @@ impl VisitedRepositories {
                                         when,
                                     ) {
                                         Ok(repo_data) => {
+                                            debug!(
+                                                "Data for {notify_uri} was updated using snapshot"
+                                            );
                                             self.data.insert(notify_uri_string, repo_data);
                                         }
                                         Err(e) => {
-                                            info!("Could not apply snapshot for {notify_uri}, will remove content. Reason: {e}");
+                                            debug!("Could not apply snapshot for {notify_uri}, will remove content. Reason: {e}");
                                             self.data.remove(&notify_uri_string);
                                         }
                                     }
+                                } else {
+                                    debug!("Data for uri {notify_uri} was updated using deltas");
                                 }
                             }
                         }
