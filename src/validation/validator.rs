@@ -780,7 +780,6 @@ impl VisitedRepositories {
         let elements = snapshot.into_elements();
         trace!("Processing {} objects", elements.len());
 
-        #[allow(clippy::mutable_key_type)]
         let objects: HashMap<UriString, RepositoryObject> = elements
             .into_iter()
             .map(|e| {
