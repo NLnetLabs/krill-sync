@@ -120,7 +120,11 @@ pub struct Config {
     pub notification_uri: Https,
 
     /// Slash terminated base uri for the notify file source
-    #[structopt(long = "source_uri_base", value_name = "uri")]
+    #[structopt(
+        long = "source-uri-base",
+        alias = "source_uri_base",
+        value_name = "uri"
+    )]
     pub source_uri_base: Option<FetchSource>,
 
     #[structopt(skip)]
@@ -141,6 +145,16 @@ pub struct Config {
     /// unfortunately cannot really be enforced in the Publication Server either.
     #[structopt(long = "tal-reject-invalid")]
     pub tal_reject_invalid: bool,
+
+    /// If true: do not attempt to download any additional data from repositories
+    /// other than the source repository that is being synced when doing validation.
+    /// This may be particularly useful to speed up the validation process if the
+    /// source repository is the repository that is being used by the (one) TAL
+    /// used for validation. But note that the validation process will use cached data
+    /// from the previous run, so this can also be useful for repositories for CAs
+    /// further down in the tree.
+    #[structopt(long = "offline-validation")]
+    pub offline_validation: bool,
 }
 
 impl Config {
@@ -219,6 +233,7 @@ pub fn create_test_config(
         fetch_map: None, // will be set in post_configure
         tal_files: vec![],
         tal_reject_invalid: false,
+        offline_validation: true,
     };
     post_configure(config).unwrap()
 }

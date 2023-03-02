@@ -19,7 +19,7 @@ use crate::{
     fetch::{FetchMap, FetchMode, FetchSource, Fetcher, NotificationFileResponse},
     file_ops,
     util::{self, Time},
-    validation::{LocalNotificationFile, Tal, Validator},
+    validation::{LocalNotificationFile, Tal, UriString, Validator},
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -170,12 +170,13 @@ impl RrdpState {
                 notification: candidate_notification,
             };
 
-            let report = validator.validate(Some(&local))?;
+            let report = validator.validate(Some(&local), config.offline_validation)?;
 
-            if let Some(rrdp_report) = report.rrdp_repositories.get(&config.notification_uri) {
+            let notification_uri_string = UriString::from(&config.notification_uri);
+
+            if let Some(rrdp_report) = report.rrdp_repositories.get(&notification_uri_string) {
                 let summary = format!(
-                    "{}: {} issues, {} certs, {} roas, {} vrps, {} aspas, {} router certs",
-                    config.notification_uri,
+                    "{notification_uri_string}: {} issues, {} certs, {} roas, {} vrps, {} aspas, {} router certs",
                     rrdp_report.issues.len(),
                     rrdp_report.nr_ca_certs,
                     rrdp_report.nr_roas,
@@ -213,13 +214,10 @@ impl RrdpState {
             } else if config.tal_reject_invalid {
                 Err(anyhow!(
                     "The repository {} was not seen in validation. Exiting",
-                    config.notification_uri
+                    notification_uri_string
                 ))
             } else {
-                warn!(
-                    "The repository {} was not seen in validation.",
-                    config.notification_uri
-                );
+                warn!("The repository {notification_uri_string} was not seen in validation.",);
                 Ok(())
             }
         } else {
@@ -700,5 +698,18 @@ impl DeprecatedFile {
             since: Time::now(),
             path,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rrdp_state_deserialize() {
+        let _state = RrdpState::recover(&PathBuf::from(
+            "test-resources/validation/data-lacnic/rrdp-state.json",
+        ))
+        .unwrap();
     }
 }

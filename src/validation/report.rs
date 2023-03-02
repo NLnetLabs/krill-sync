@@ -11,17 +11,19 @@ use rpki::{
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
+use super::UriString;
+
 /// Report the outcome of a validation run.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ValidationReport {
     pub certs: Vec<ValidatedCaCertificate>,
-    pub rrdp_repositories: HashMap<uri::Https, RepositoryReport>,
+    pub rrdp_repositories: HashMap<UriString, RepositoryReport>,
 }
 
 impl ValidationReport {
     pub fn add_cert(&mut self, cert: ValidatedCaCertificate) {
-        if let Some(rrdp_uri) = cert.ca_cert_info.sia_rrdp.clone() {
-            let repo_stats = self.rrdp_repositories.entry(rrdp_uri).or_default();
+        if let Some(rrdp_uri) = &cert.ca_cert_info.sia_rrdp {
+            let repo_stats = self.rrdp_repositories.entry(rrdp_uri.into()).or_default();
             repo_stats.process_cert(&cert);
         }
         self.certs.push(cert);
@@ -136,36 +138,36 @@ impl ValidatedCaCertificate {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ValidatedRoa {
-    uri: uri::Rsync,
+    uri: UriString,
     vrps: Vec<RoaPayload>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ValidatedChild {
-    uri: uri::Rsync,
+    uri: UriString,
     cert_info: ValidatedCaCertInfo,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ValidatedRouterCert {
-    uri: uri::Rsync,
+    uri: UriString,
     //todo: router key info
 }
 
 impl ValidatedRouterCert {
-    pub fn new(uri: uri::Rsync) -> Self {
+    pub fn new(uri: UriString) -> Self {
         ValidatedRouterCert { uri }
     }
 }
 
 impl ValidatedChild {
-    pub fn new(uri: uri::Rsync, cert_info: ValidatedCaCertInfo) -> Self {
+    pub fn new(uri: UriString, cert_info: ValidatedCaCertInfo) -> Self {
         ValidatedChild { uri, cert_info }
     }
 }
 
 impl ValidatedRoa {
-    pub fn make(uri: uri::Rsync, roa: RouteOriginAttestation) -> Self {
+    pub fn make(uri: UriString, roa: RouteOriginAttestation) -> Self {
         let asn = AsNumber(roa.as_id().into_u32());
 
         let mut vrps = vec![];
@@ -207,13 +209,13 @@ pub struct RoaPayload {
 /// TODO: Use krill type.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ValidatedAspa {
-    uri: uri::Rsync,
+    uri: UriString,
     customer: AsNumber,
     providers: Vec<AspaProvider>,
 }
 
 impl ValidatedAspa {
-    pub fn make(uri: uri::Rsync, aspa: AsProviderAttestation) -> Self {
+    pub fn make(uri: UriString, aspa: AsProviderAttestation) -> Self {
         let customer = AsNumber(aspa.customer_as().into_u32());
         let providers = aspa
             .provider_as_set()
@@ -398,12 +400,12 @@ impl IgnoredObjectInfo {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ValidationIssue {
-    pub uri: Option<uri::Rsync>,
+    pub uri: Option<UriString>,
     pub msg: String,
 }
 
 impl ValidationIssue {
-    pub fn with_uri_and_msg(uri: uri::Rsync, msg: impl fmt::Display) -> Self {
+    pub fn with_uri_and_msg(uri: UriString, msg: impl fmt::Display) -> Self {
         ValidationIssue {
             uri: Some(uri),
             msg: msg.to_string(),
@@ -438,6 +440,7 @@ impl TryFrom<&ResourceCert> for ValidatedCaCertInfo {
             .ca_repository()
             .cloned()
             .ok_or("Certificate has no SIA CA")?;
+
         let sia_mft = resource_cert
             .rpki_manifest()
             .cloned()
