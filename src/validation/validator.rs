@@ -65,25 +65,16 @@ impl Validator {
         self.tals == other.tals
     }
 
-    pub fn validate(
-        &mut self,
-        local: Option<&LocalNotificationFile>,
-        offline: bool,
-    ) -> Result<ValidationReport> {
-        self.validate_at(local, offline, Time::now())
+    pub fn validate(&mut self, offline: bool) -> Result<ValidationReport> {
+        self.validate_at(offline, Time::now())
     }
 
-    pub fn validate_at(
-        &mut self,
-        local: Option<&LocalNotificationFile>,
-        offline: bool,
-        when: Time,
-    ) -> Result<ValidationReport> {
+    pub fn validate_at(&mut self, offline: bool, when: Time) -> Result<ValidationReport> {
         let mut report = ValidationReport::default();
 
         for tal in self.tals.clone() {
             info!("Validate TA {}", tal.name());
-            report.add_other(self.validate_ta_at(&tal, local, offline, when)?);
+            report.add_other(self.validate_ta_at(&tal, offline, when)?);
         }
 
         Ok(report)
@@ -92,7 +83,6 @@ impl Validator {
     pub fn validate_ta_at(
         &mut self,
         tal: &Tal,
-        local: Option<&LocalNotificationFile>,
         offline: bool,
         when: Time,
     ) -> Result<ValidationReport> {
@@ -101,14 +91,13 @@ impl Validator {
         let info = ValidatedCaCertInfo::try_from(&ta_cert)
             .map_err(|e| anyhow!(format!("Invalid TA certificate: {e}")))?;
 
-        Ok(self.validate_tree_at(&ta_cert, &info, local, offline, when))
+        Ok(self.validate_tree_at(&ta_cert, &info, offline, when))
     }
 
     fn validate_tree_at(
         &mut self,
         resource_cert: &ResourceCert,
         ca_cert_info: &ValidatedCaCertInfo,
-        local: Option<&LocalNotificationFile>,
         offline: bool,
         when: Time,
     ) -> ValidationReport {
@@ -145,7 +134,7 @@ impl Validator {
                 }
             };
 
-            let data = match self.repositories.get_latest(sia_rrdp, local, offline, when) {
+            let data = match self.repositories.get_latest(sia_rrdp, offline, when) {
                 Ok(data) => data,
                 Err(e) => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
@@ -464,7 +453,7 @@ impl Validator {
 
         // recurse child certificates
         for (cert, info) in child_certificates {
-            report.add_other(self.validate_tree_at(&cert, &info, local, offline, when));
+            report.add_other(self.validate_tree_at(&cert, &info, offline, when));
         }
 
         report
@@ -522,12 +511,6 @@ impl fmt::Display for UriString {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct LocalNotificationFile {
-    pub uri: uri::Https,
-    pub notification: NotificationFile,
-}
-
 impl VisitedRepositories {
     /// Gets the latest data for the given notify_uri.
     ///
@@ -536,23 +519,21 @@ impl VisitedRepositories {
     fn get_latest(
         &mut self,
         notify_uri: &uri::Https,
-        local: Option<&LocalNotificationFile>,
         offline: bool,
         when: Time,
     ) -> Result<&RepositoryData> {
         let fetcher = self.get_fetcher(notify_uri);
-        let is_local = local.map(|local| &local.uri == notify_uri).unwrap_or(false);
         let notify_uri_string = UriString::from(notify_uri);
 
         match self.data.get_mut(&notify_uri_string) {
             None => {
-                if offline && !is_local {
+                if offline {
                     debug!("Skip downloading content for {notify_uri} in offline validation mode.")
                 } else {
                     // We did not have any data for this notify_uri, so add
                     // it now as a new repository.
                     debug!("New repository found. Will sync data for {notify_uri}");
-                    match Self::retrieve_new_repository(notify_uri, &fetcher, local, when) {
+                    match Self::retrieve_new_repository(&fetcher, when) {
                         Ok(repo_data) => {
                             debug!("Save repository data for {notify_uri}");
                             self.data.insert(notify_uri_string, repo_data);
@@ -572,10 +553,10 @@ impl VisitedRepositories {
 
                 if repo_data.fetched {
                     // nothing to fetch.. don't even trace log
-                } else if !is_local && offline {
+                } else if offline {
                     debug!("Use cached data for {notify_uri} in offline validation mode.");
                     repo_data.fetched = true;
-                } else if !is_local && repo_data.last_fetch > Time::now() - Duration::minutes(60) {
+                } else if repo_data.last_fetch > Time::now() - Duration::minutes(60) {
                     debug!("Won't check {notify_uri} in this run. It was updated recently.");
                     repo_data.fetched = true;
                 } else {
@@ -587,9 +568,8 @@ impl VisitedRepositories {
 
                     // Get the notification response to see if we need
                     // to update the data.
-                    let etag = repo_data.etag.clone();
                     let notification_response =
-                        Self::read_notification_file(&fetcher, notify_uri, local, etag.as_ref())?;
+                        fetcher.read_notification_file(repo_data.etag.as_ref())?;
 
                     match notification_response {
                         NotificationFileResponse::Unmodified => {
@@ -652,15 +632,8 @@ impl VisitedRepositories {
             .ok_or(anyhow!("No data for repository at: {}", notify_uri))
     }
 
-    fn retrieve_new_repository(
-        notify_uri: &uri::Https,
-        fetcher: &Fetcher,
-        local: Option<&LocalNotificationFile>,
-        when: Time,
-    ) -> Result<RepositoryData> {
-        let (notification, etag) =
-            Self::read_notification_file(fetcher, notify_uri, local, None)?.content()?;
-
+    fn retrieve_new_repository(fetcher: &Fetcher, when: Time) -> Result<RepositoryData> {
+        let (notification, etag) = fetcher.read_notification_file(None)?.content()?;
         Self::repository_data_from_snapshot(notification, etag, fetcher, when)
     }
 
@@ -803,26 +776,6 @@ impl VisitedRepositories {
         })
     }
 
-    fn read_notification_file(
-        fetcher: &Fetcher,
-        notify_uri: &uri::Https,
-        local: Option<&LocalNotificationFile>,
-        etag: Option<&String>,
-    ) -> Result<NotificationFileResponse> {
-        if let Some(local) = local {
-            if &local.uri == notify_uri {
-                Ok(NotificationFileResponse::Data {
-                    etag: None,
-                    notification: local.notification.clone(),
-                })
-            } else {
-                fetcher.read_notification_file(etag)
-            }
-        } else {
-            fetcher.read_notification_file(etag)
-        }
-    }
-
     fn read_delta_file(fetcher: &Fetcher, uri: &uri::Https, hash: rrdp::Hash) -> Result<Delta> {
         let data = Self::read_bytes(fetcher, uri, hash)?;
         Delta::parse(data.as_ref()).with_context(|| format!("Cannot parse delta at uri: {uri}"))
@@ -933,7 +886,7 @@ mod tests {
         let mut validator = Validator::new(vec![tal], vec![fetcher]);
 
         validator
-            .validate_at(None, true, Time::utc(2023, 2, 13, 15, 58, 00))
+            .validate_at(true, Time::utc(2023, 2, 13, 15, 58, 00))
             .unwrap();
     }
 }
