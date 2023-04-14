@@ -138,6 +138,11 @@ pub struct Config {
     #[structopt(long = "tal", value_name = "tal file", parse(from_os_str))]
     pub tal_files: Vec<PathBuf>,
 
+    /// Optional external script(s) used to pre-validate the content of the
+    /// repository before updating the target RRDP and rsync directories.
+    #[structopt(long = "pre-validate", value_name = "script", parse(from_os_str))]
+    pub pre_validation_scripts: Vec<PathBuf>,
+
     /// If true: reject if there are objects invalid under configured TAL(s)
     /// Note that this is limited to objects that are expected to be present and
     /// valid under the TAL(s). Other objects are not validated and are always
@@ -182,6 +187,14 @@ impl Config {
         };
 
         Fetcher::new(self.notification_uri.clone(), self.fetch_map.clone(), mode)
+    }
+
+    pub fn staging_path(&self, relative: &str) -> PathBuf {
+        self.state_dir.join("pre-validate-staging").join(relative)
+    }
+
+    pub fn staging_dir(&self) -> PathBuf {
+        self.state_dir.join("pre-validate-staging")
     }
 
     pub fn rrdp_state_path(&self) -> PathBuf {
@@ -232,6 +245,7 @@ pub fn create_test_config(
         source_uri_base: Some(source_uri_base),
         fetch_map: None, // will be set in post_configure
         tal_files: vec![],
+        pre_validation_scripts: vec![],
         tal_reject_invalid: false,
         offline_validation: true,
     };

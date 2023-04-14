@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::info;
+use log::{debug, info};
 
 use crate::{config::Config, rrdp::RrdpState, rsync};
 
@@ -22,38 +22,44 @@ pub fn process(config: &Config) -> Result<()> {
     // Update the RRDP state, if there are any changes in the source.
     // ===================================================================
     //
-    // This will save new snapshot and delta files to disk. If there
-    // are no changes, i.e. the notification file is not changed, then
-    // this is essentially a no-op.
+    // This will save new snapshot and delta files to the staging area
+    // directory on disk and returns a list of these files.
     //
-    // Note that while the new snapshot and deltas are saved immediately,
-    // we only save the new notification file is later. This allows us to
-    // run a validation check on the new RRDP files before relying parties
-    // will see the updated notification file.
+    // If there are no changes, i.e. the notification file is not changed,
+    // then this list is empty and this is essentially a no-op.
     // ===================================================================
-    let changed = rrdp_state.update(config.rrdp_max_deltas, &config.fetcher())?;
+    let staged = match rrdp_state.update_staged(config)? {
+        Some(staged) => staged,
+        None => {
+            debug!("No changes in RRDP content found");
+            return Ok(());
+        }
+    };
 
     // ===================================================================
-    // Validate if configured with tals.
+    // Pre-validate with internal validator.
     // ===================================================================
     //
-    // Pre-validate the snapshot and delta files for the source repository.
-    // Validation is done even if there were no changes, so that we can
-    // continue to monitor the validation state.
+    // Pre-validate the staged files. In case there are NO configured
+    // TALs, then no actual validation is done, and any data from previous
+    // validation runs will be removed from the RrdpState.
     //
-    // If there were issues then dependent on the configuration either just
-    // warn about these issues and continue (default), or exit with an error.
-    //
-    // If we exit here, we will leave the snapshot and delta files in place.
-    // In case there were any changes then exiting here will ensure that
-    // the new notification file is not updated. And as a result Relying
-    // Parties will not see the new files with potential issues.
+    // If any validation issues are found, then dependent on configuration
+    // we either just warn about this and continue (default), or exit with
+    // an error.
     // ===================================================================
     rrdp_state.pre_validate(config)?;
 
-    // Clean up any RRDP files and empty parent directories if they had been
-    // deprecated for more than the configured 'cleanup_after' time.
-    rrdp_state.clean(config)?;
+    // ===================================================================
+    // Apply staged changes.
+    // ===================================================================
+    //
+    // - updates the RrdpState with new content,
+    // - deprecate old files
+    // - move new snapshot and deltas to the target RRDP dir
+    // - clean up old files, deprecated for the configured time
+    // - move new notification file to the target RRDP dir
+    rrdp_state.apply_staged_changed(staged, config)?;
 
     // ===================================================================
     // Update rsync state, if rsync support is enabled
@@ -76,19 +82,16 @@ pub fn process(config: &Config) -> Result<()> {
     // directories in quick succession.
     //
     // We will also clean out old rsync directories if they had been
-    // deprecated for more than the 'cleanup_after' time, even if there
-    // was no new data to write (i.e. change == false).
+    // deprecated for more than the 'cleanup_after' time,.
     // ===================================================================
     if config.rsync_enabled() {
-        rsync::update_from_rrdp_state(&rrdp_state, changed, config)?;
+        rsync::update_from_rrdp_state(&rrdp_state, config)?;
     }
 
     // ===================================================================
     // Update the notification file if there was any change.
     // ===================================================================
-    if changed {
-        rrdp_state.write_notification()?;
-    }
+    rrdp_state.write_notification(config.rrdp_notify_delay)?;
 
     // ===================================================================
     // Persist state

@@ -1,5 +1,4 @@
 use std::{
-    collections::VecDeque,
     fs,
     path::{Path, PathBuf},
 };
@@ -19,7 +18,7 @@ use crate::{
     fetch::{FetchMap, FetchMode, FetchSource, Fetcher, NotificationFileResponse},
     file_ops,
     util::{self, Time},
-    validation::{LocalNotificationFile, Tal, UriString, Validator},
+    validation::{Tal, UriString, Validator},
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -34,7 +33,7 @@ pub struct RrdpState {
     snapshot: Option<SnapshotState>,
 
     /// Delta states (xml, hash, path)
-    deltas: VecDeque<DeltaState>,
+    deltas: Vec<DeltaState>,
 
     /// Deprecated files - which may be cleaned up after some time
     deprecated_files: Vec<DeprecatedFile>,
@@ -47,19 +46,16 @@ pub struct RrdpState {
 impl RrdpState {
     /// Create a new, empty, RrdpState which can then be updated.
     pub fn create(config: &Config) -> Result<Self> {
-        info!("No prior state found, will build up state from latest snapshot at source");
+        info!("No prior state found, will create empty state and update it.");
 
-        let notification_uri = &config.notification_uri;
-        let rrdp_dir = &config.rrdp_dir;
-
-        let notification_source = NotificationSource::build(notification_uri.clone())?;
-        let mappings = SourceMappings::build(notification_uri.clone(), rrdp_dir.clone())?;
+        let notification_source = NotificationSource::build(config.notification_uri.clone())?;
+        let mappings = SourceMappings::build(config)?;
 
         Ok(RrdpState {
             notification_source,
             mappings,
             snapshot: None,
-            deltas: VecDeque::new(),
+            deltas: vec![],
             deprecated_files: vec![],
             validator: None,
         })
@@ -91,66 +87,97 @@ impl RrdpState {
         Ok(recovered)
     }
 
-    /// Try to update this state using the notification file found in the specified fetcher.
+    /// Get updates and saved them into the staging directory.
     ///
     /// Returns:
-    ///   Ok(true)  if there was an update
-    ///   Ok(false) if there was no update (serial and session match current)
-    ///   Err       if there was an error trying to update
-    pub fn update(&mut self, limit: Option<usize>, fetcher: &Fetcher) -> Result<bool> {
-        match self.notification_source.fetch(fetcher)? {
+    ///   Ok(Some(StagedChanges))  if there was an update
+    ///   Ok(None)                 if there was no update (serial and session match current)
+    ///   Err                      if there was an error trying to update
+    pub fn update_staged(&self, config: &Config) -> Result<Option<StagedChanges>> {
+        let limit = config.rrdp_max_deltas;
+        let fetcher = config.fetcher();
+
+        match self.notification_source.fetch(&fetcher)? {
             None => {
                 debug!("Notification file at source to sync was not changed, no updated needed.");
-                Ok(false)
+                Ok(None)
             }
-            Some(mut notification) => {
-                if !notification.sort_and_verify_deltas(limit) {
+            Some((mut notification_file, notification_etag)) => {
+                if !notification_file.sort_and_verify_deltas(limit) {
                     return Err(anyhow!("Notification file contained gaps in deltas"));
                 }
 
-                let delta_cut_off = if let Some(snapshot) = &self.snapshot {
-                    if snapshot.session_id() != notification.session_id() {
-                        // session reset:
-                        //  - set delta cut off so that all deltas will be deprecated
-                        snapshot.serial() + 1
+                let mut session_reset = false;
+
+                if let Some(snapshot) = &self.snapshot {
+                    if snapshot.session_id() != notification_file.session_id() {
+                        // set session reset, ensure that all deltas will be deprecated
+                        session_reset = true;
                     } else {
-                        match snapshot.serial().cmp(&notification.serial()) {
+                        match snapshot.serial().cmp(&notification_file.serial()) {
                             std::cmp::Ordering::Less => {
-                                // session unchanged, and there is an update:
-                                // - set delta cut off to deltas no longer in notification
-                                notification
-                                    .deltas()
-                                    .first() // deltas are ordered from low to high
-                                    .map(|d| d.serial())
-                                    .unwrap_or_else(|| notification.serial())
+                                //  Ok, we have an update to process
+                                debug!(
+                                    "Notification file was updated from serial '{}' to '{}'.",
+                                    snapshot.serial(),
+                                    notification_file.serial()
+                                )
                             }
                             std::cmp::Ordering::Equal => {
                                 // no change, session and serial unchanged
                                 debug!("Notification file unchanged (etag not supported?), no update needed.");
-                                return Ok(false);
+                                return Ok(None);
                             }
                             std::cmp::Ordering::Greater => {
                                 // This is a problem..
                                 return Err(anyhow!(format!(
                                     "The notification file serial '{}' is *before* our serial '{}'. Server session reset recommended.",
-                                    notification.serial(),
+                                    notification_file.serial(),
                                     snapshot.serial()
                                 )));
                             }
                         }
                     }
-                } else {
-                    // There is no current snapshot, presumably there will be no details
-                    // either. Still set the cut off to deprecate any current delta so
-                    // that we don't need different logic below. This, and deprecating
-                    // the non-existing snapshot, will be a no-op.
-                    notification.serial()
-                };
+                }
 
-                self.snapshot_update(&notification, fetcher)?;
-                self.deltas_update(&notification, fetcher, delta_cut_off, limit)?;
+                // Save the notification file to the staging area so that it can
+                // be used for validation.
+                {
+                    let path = config.staging_path(self.notification_source.name());
+                    let mut bytes: Vec<u8> = vec![];
+                    notification_file.write_xml(&mut bytes)?;
 
-                Ok(true)
+                    file_ops::write_buf(&path, &bytes).with_context(|| {
+                        format!(
+                            "Could not write staging notification file to: {}",
+                            path.display()
+                        )
+                    })?;
+                }
+
+                // Set the cutoff value so that any deltas with a serial lower than
+                // the new notification's lowest serial are deprecated.
+                //
+                // Note that if we saw a session reset, then all currently held delta
+                // files will be deprecated. And only deltas found in the new notification
+                // file will be added after staging.
+                let cutoff = notification_file
+                    .deltas()
+                    .first() // deltas are ordered from low to high
+                    .map(|d| d.serial())
+                    .unwrap_or_else(|| notification_file.serial());
+
+                let snapshot = self.snapshot_stage(&notification_file, &fetcher, config)?;
+                let deltas =
+                    self.deltas_stage(&notification_file, session_reset, &fetcher, config)?;
+
+                Ok(Some(StagedChanges {
+                    notification_etag,
+                    snapshot,
+                    deltas,
+                    cutoff,
+                    session_reset,
+                }))
             }
         }
     }
@@ -161,16 +188,10 @@ impl RrdpState {
     pub fn pre_validate(&mut self, config: &Config) -> Result<()> {
         self.reconfigure_validator(config)?;
 
-        let candidate_notification = self.make_notification_file()?;
-
         if let Some(validator) = self.validator.as_mut() {
             info!("Validate using configured TALs and report on source repository");
-            let local = LocalNotificationFile {
-                uri: config.notification_uri.clone(),
-                notification: candidate_notification,
-            };
 
-            let report = validator.validate(Some(&local), config.offline_validation)?;
+            let report = validator.validate(config.offline_validation)?;
 
             let notification_uri_string = UriString::from(&config.notification_uri);
 
@@ -283,7 +304,7 @@ impl RrdpState {
             .parent()
             .ok_or(anyhow!("cannot get parent dir of notification_uri"))?;
 
-        let fetch_map = FetchMap::new(base_https, FetchSource::File(config.rrdp_dir.clone()));
+        let fetch_map = FetchMap::new(base_https, FetchSource::File(config.staging_dir()));
         let fetcher = Fetcher::new(notification_uri, Some(fetch_map), FetchMode::Insecure);
 
         Ok(Validator::new(tals, vec![fetcher]))
@@ -295,6 +316,59 @@ impl RrdpState {
             .as_ref()
             .map(|existing| !existing.equivalent(new_validator))
             .unwrap_or(true)
+    }
+
+    /// Apply staged changes.
+    ///
+    /// - updates the RrdpState with new content
+    /// - deprecate old files
+    /// - move new snapshot and deltas to the target RRDP dir
+    /// - clean up old files, deprecated for the configured time
+    /// - move new notification file to the target RRDP dir
+    pub fn apply_staged_changed(
+        &mut self,
+        mut staged: StagedChanges,
+        config: &Config,
+    ) -> Result<()> {
+        // Move new snapshot and delta files.
+        let staging_base_dir = config.staging_dir();
+        let target_base_dir = &config.rrdp_dir;
+
+        file_ops::move_file(
+            &staging_base_dir,
+            target_base_dir,
+            staged.snapshot.rel_path(),
+        )?;
+
+        for delta in &staged.deltas {
+            file_ops::move_file(&staging_base_dir, target_base_dir, delta.rel_path())?;
+        }
+
+        // deprecate old snapshot if it is present
+        if let Some(old_path) = self.snapshot_path() {
+            self.deprecated_files.push(DeprecatedFile::new(old_path));
+        }
+
+        // update snapshot info
+        self.snapshot = Some(staged.snapshot);
+
+        // deprecate old deltas
+        if staged.session_reset {
+            self.deltas_deprecate_all()
+        } else {
+            self.deltas_deprecate_before(staged.cutoff);
+        }
+
+        // add new deltas, re-order delta in descending serial order.
+        self.deltas.append(&mut staged.deltas);
+        self.deltas.sort_by_key(|d| d.serial());
+        self.deltas.reverse();
+
+        // Clean up any RRDP files and empty parent directories if they had been
+        // deprecated for more than the configured 'cleanup_after' time.
+        self.clean(config)?;
+
+        Ok(())
     }
 
     /// Cleans deprecated files and their parent directories if they are empty
@@ -334,7 +408,15 @@ impl RrdpState {
     /// Writes the notification file to disk. Will first write to a
     /// temporary file and then rename it to avoid serving partially
     /// written files.
-    pub fn write_notification(&self) -> Result<()> {
+    pub fn write_notification(&self, delay: u64) -> Result<()> {
+        if delay > 0 {
+            info!(
+                "Waiting for configured {} seconds before updating the notification file.",
+                delay
+            );
+            std::thread::sleep(std::time::Duration::from_secs(delay));
+        }
+
         let notification_file_filename_final = self.notification_source.name();
         let notification_file_filename_tmp = self.notification_source.tmp_name();
 
@@ -396,30 +478,25 @@ impl RrdpState {
 
     /// Update the snapshot, downloads it and checks the hash,
     /// and deprecates the old snapshot if it exists.
-    fn snapshot_update(
-        &mut self,
+    fn snapshot_stage(
+        &self,
         notification: &NotificationFile,
         fetcher: &Fetcher,
-    ) -> Result<()> {
-        // deprecate old snapshot if it is present
-        if let Some(old_path) = self.snapshot_path() {
-            self.deprecated_files.push(DeprecatedFile::new(old_path));
-        }
-
+        config: &Config,
+    ) -> Result<SnapshotState> {
         let snapshot_info = notification.snapshot();
-        let target = self.mappings.path_for_uri(snapshot_info.uri())?;
+        let relative_name = self.mappings.relative(snapshot_info.uri())?;
+        let target = config.staging_path(&relative_name);
         fetcher.retrieve_file(snapshot_info.uri(), snapshot_info.hash(), &target)?;
 
         let rel_path = self.mappings.relative(snapshot_info.uri())?;
 
-        self.snapshot = Some(SnapshotState::create(
+        Ok(SnapshotState::create(
             notification.session_id(),
             notification.serial(),
             snapshot_info.hash(),
             rel_path,
-        ));
-
-        Ok(())
+        ))
     }
 
     pub fn snapshot_path(&self) -> Option<PathBuf> {
@@ -432,60 +509,48 @@ impl RrdpState {
         self.snapshot.as_ref()
     }
 
-    /// Update deltas:
-    /// - deprecate old deltas
-    /// - download new deltas
-    /// - check limit and deprecate any surplus deltas
-    fn deltas_update(
-        &mut self,
+    /// Stage new deltas
+    fn deltas_stage(
+        &self,
         notification: &NotificationFile,
+        session_reset: bool,
         fetcher: &Fetcher,
-        delta_cut_off: u64,
-        limit: Option<usize>,
-    ) -> Result<()> {
-        // First deprecate existing deltas. Note that 'delta_cut_off' here
-        // may (will) be higher than the current notification serial if
-        // a session reset occurred.
-        self.deltas_deprecate_before(delta_cut_off);
+        config: &Config,
+    ) -> Result<Vec<DeltaState>> {
+        let mut new_deltas = vec![];
 
-        // Download new deltas, even if they would be deprecated again
-        // because of a configured limit.
         for delta in notification.deltas() {
             let serial = delta.serial();
 
-            let delta_is_new = self
-                .deltas
-                .front()
-                .map(|highest| highest.serial() < serial)
-                .unwrap_or(true);
+            // Check if this is a new delta.
+            //
+            // This is always true if we are dealing with a session reset.
+            // Otherwise we check the existing deltas. Because we keep deltas
+            // sorted from high to low we only need to check the first element.
+            // If there is no first element, then this delta is new by definition.
+            let delta_is_new = session_reset
+                || self
+                    .deltas
+                    .first()
+                    .map(|highest| highest.serial() < serial)
+                    .unwrap_or(true);
 
             if delta_is_new {
                 let uri = delta.uri();
                 let hash = delta.hash();
 
-                let target = self.mappings.path_for_uri(uri)?;
+                let relative_path = self.mappings.relative(uri)?;
+                let target = config.staging_path(&relative_path);
+
                 fetcher.retrieve_file(uri, hash, &target)?;
 
                 let rel_path = self.mappings.relative(uri)?;
 
-                self.deltas
-                    .push_front(DeltaState::create(serial, hash, rel_path));
+                new_deltas.push(DeltaState::create(serial, hash, rel_path));
             }
         }
 
-        // Now deprecate everything that is over the limit, we do this only
-        // now because we want to be sure that everything is downloaded first
-        // and can be archived - if configured to do so.
-        if let Some(limit) = limit {
-            if let Some(highest) = self.deltas.front().map(|d| d.serial()) {
-                if highest > limit as u64 {
-                    let cut_off = highest - limit as u64;
-                    self.deltas_deprecate_before(cut_off);
-                }
-            }
-        }
-
-        Ok(())
+        Ok(new_deltas)
     }
 
     /// Remove deltas before the given serial and put them on the deprecated file list.
@@ -494,8 +559,8 @@ impl RrdpState {
     /// - This may be a no-op in case all current deltas are still relevant. In that
     ///   case this function simply does nothing.
     /// - This function assumes that `self.deltas` is kept in reverse serial order.
-    fn deltas_deprecate_before(&mut self, cut_off: u64) {
-        let cut_off_idx_opt = self.deltas.iter().position(|c| c.serial < cut_off);
+    fn deltas_deprecate_before(&mut self, cutoff: u64) {
+        let cut_off_idx_opt = self.deltas.iter().position(|c| c.serial < cutoff);
 
         if let Some(cut_off_idx) = cut_off_idx_opt {
             let deltas: Vec<DeltaState> = self.deltas.drain(cut_off_idx..).collect();
@@ -504,6 +569,16 @@ impl RrdpState {
                 self.deprecated_files.push(DeprecatedFile::new(path));
             }
         }
+    }
+
+    /// Remove all deltas put them on the deprecated file list.
+    fn deltas_deprecate_all(&mut self) {
+        for delta in &self.deltas {
+            let path = self.mappings.path(delta.rel_path());
+            self.deprecated_files.push(DeprecatedFile::new(path));
+        }
+
+        self.deltas = vec![];
     }
 }
 
@@ -534,12 +609,9 @@ impl NotificationSource {
         })
     }
 
-    pub fn fetch(&mut self, fetcher: &Fetcher) -> Result<Option<NotificationFile>> {
+    pub fn fetch(&self, fetcher: &Fetcher) -> Result<Option<(NotificationFile, Option<String>)>> {
         match fetcher.read_notification_file(self.etag.as_ref())? {
-            NotificationFileResponse::Data { notification, etag } => {
-                self.etag = etag;
-                Ok(Some(notification))
-            }
+            NotificationFileResponse::Data { notification, etag } => Ok(Some((notification, etag))),
             NotificationFileResponse::Unmodified => Ok(None),
         }
     }
@@ -568,10 +640,13 @@ pub struct SourceMappings {
 }
 
 impl SourceMappings {
-    pub fn build(notification_uri: Https, rrdp_dir: PathBuf) -> Result<Self> {
+    pub fn build(config: &Config) -> Result<Self> {
+        let notification_uri = &config.notification_uri;
         let base_uri = notification_uri
             .parent()
             .ok_or_else(|| anyhow!("Illegal notification uri: {}", notification_uri))?;
+
+        let rrdp_dir = config.rrdp_dir.clone();
 
         Ok(SourceMappings { base_uri, rrdp_dir })
     }
@@ -597,6 +672,7 @@ impl SourceMappings {
         self.rrdp_dir.join(rel_path)
     }
 
+    /// Resolve the given RRDP URI to the target path on disk
     pub fn path_for_uri(&self, uri: &Https) -> Result<PathBuf> {
         let rel_path = self.relative(uri)?;
         Ok(self.path(&rel_path))
@@ -682,6 +758,23 @@ impl DeltaState {
     pub fn rel_path(&self) -> &str {
         self.rel_path.as_str()
     }
+}
+
+/// Represents staged changes
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StagedChanges {
+    notification_etag: Option<String>,
+    snapshot: SnapshotState,
+    deltas: Vec<DeltaState>,
+    cutoff: u64,         // deprecate existing deltas with a lower serial
+    session_reset: bool, // implies that all current deltas are deprecated
+}
+
+/// Represents a staged RRDP file.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StagedFile {
+    path: PathBuf,
+    destination: PathBuf,
 }
 
 /// Represents a file which is no longer relevant. It can be deleted after a configurable
