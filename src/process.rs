@@ -1,5 +1,7 @@
-use anyhow::Result;
-use log::{debug, info};
+use std::{process::Command, str::from_utf8};
+
+use anyhow::{anyhow, Result};
+use log::{debug, error, info};
 
 use crate::{config::Config, rrdp::RrdpState, rsync};
 
@@ -49,6 +51,52 @@ pub fn process(config: &Config) -> Result<()> {
     // an error.
     // ===================================================================
     rrdp_state.pre_validate(config)?;
+
+    // ===================================================================
+    // Pre-validate with configured scripts.
+    // ===================================================================
+    //
+    // Call each configured script sequentially, and remember the exit
+    // status for each script. We want to run each script even if there
+    // is a failure, because it may be relevant to know if more than
+    // one script fails.
+    //
+    // Log issues if found and then dependent on configuration either
+    // continue, or exit.
+    // ===================================================================
+    {
+        if !config.pre_validation_scripts.is_empty() {
+            let mut issues = false;
+
+            for script in &config.pre_validation_scripts {
+                let output = Command::new(script).output()?;
+                if output.status.success() {
+                    info!(
+                        "Validate staged repository files using {} ---> OK",
+                        script.to_string_lossy()
+                    );
+                } else {
+                    issues = true;
+
+                    error!(
+                        "Validate staged repository files using {} ---> FAILED",
+                        script.to_string_lossy()
+                    );
+                    let std_output =
+                        from_utf8(&output.stdout).unwrap_or("could not parse stdout output");
+
+                    let error_output =
+                        from_utf8(&output.stderr).unwrap_or("could not parse stderr output");
+
+                    info!("{}", std_output);
+                    error!("{}", error_output);
+                }
+            }
+            if issues && config.tal_reject_invalid {
+                return Err(anyhow!("Validation of staged repository files failed."));
+            }
+        }
+    }
 
     // ===================================================================
     // Apply staged changes.
