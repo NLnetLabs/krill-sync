@@ -32,4 +32,3 @@ jobs:
       # Optional settings:
       #
       deb_extra_build_packages: libssl-dev
-      deb_maintainer: The NLnet Labs RPKI Team <rpki@nlnetlabs.nl>
