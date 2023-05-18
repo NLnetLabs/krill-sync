@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use log::info;
+use log::{info, warn};
 use reqwest::{
     blocking::Client,
     header::{ETAG, IF_NONE_MATCH, USER_AGENT},
@@ -305,6 +305,18 @@ impl Fetcher {
     }
 
     pub fn retrieve_file(&self, uri: &Https, hash: Hash, target: &Path) -> Result<()> {
+        if let Ok(existing) = file_ops::read_file(target) {
+            // check if the downloaded file matches the hash. If not log an error and
+            // download the new file. If it matches, then just continue.
+            if !hash.matches(&existing) {
+                warn!(
+                    "Already downloaded file does not match hash, will download again, for uri: {}",
+                    uri
+                );
+            } else {
+                return Ok(());
+            }
+        }
         let source = self.resolve_source(uri)?;
         source
             .fetch(Some(hash), None, Some(target))
