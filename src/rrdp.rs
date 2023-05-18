@@ -277,6 +277,11 @@ impl RrdpState {
                 debug!("Re-using existing validator instance.")
             }
         }
+
+        if let Some(validator) = self.validator.as_mut() {
+            validator.initialise_staging_data(&config.notification_uri)?;
+        }
+
         Ok(())
     }
 

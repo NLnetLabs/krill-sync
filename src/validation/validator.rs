@@ -65,6 +65,14 @@ impl Validator {
         self.tals == other.tals
     }
 
+    /// Ensure that the staged data is updated even if we are
+    /// running in offline mode.
+    pub fn initialise_staging_data(&mut self, notify_uri: &uri::Https) -> Result<()> {
+        self.repositories
+            .get_latest(notify_uri, false, Time::now())?;
+        Ok(())
+    }
+
     pub fn validate(&mut self, offline: bool) -> Result<ValidationReport> {
         self.validate_at(offline, Time::now())
     }
@@ -184,10 +192,13 @@ impl Validator {
             };
 
             #[allow(clippy::mutable_key_type)]
-            let mut mft_entries: HashMap<_, _> = content.iter_uris(sia_ca).collect();
+            let mut mft_entries: HashMap<_, _> = content
+                .iter_uris(sia_ca)
+                .map(|(k, v)| (UriString::from(k), v))
+                .collect();
 
             let crl_uri = match mft_cert.crl_uri() {
-                Some(uri) => uri,
+                Some(uri) => UriString::from(uri),
                 None => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
                         mft_uri_string,
@@ -198,7 +209,7 @@ impl Validator {
                 }
             };
 
-            let crl_hash = match mft_entries.remove(crl_uri) {
+            let crl_hash = match mft_entries.remove(&crl_uri) {
                 Some(hash) => hash,
                 None => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
@@ -210,14 +221,10 @@ impl Validator {
                 }
             };
 
-            let crl_uri_string = UriString::from(crl_uri);
-            let crl_obj = match data.objects.get(&crl_uri_string) {
+            let crl_obj = match data.objects.get(&crl_uri) {
                 Some(bytes) => bytes,
                 None => {
-                    ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                        crl_uri_string,
-                        format!("CRL at {crl_uri} not found"),
-                    ));
+                    ca_cert.add_issue(ValidationIssue::with_uri_and_msg(crl_uri, "CRL not found"));
                     report.add_cert(ca_cert);
                     return report;
                 }
@@ -225,7 +232,7 @@ impl Validator {
 
             if crl_hash.verify(crl_obj.bytes()).is_err() {
                 ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                    crl_uri_string,
+                    crl_uri,
                     "CRL does not match hash on manifest",
                 ));
                 report.add_cert(ca_cert);
@@ -236,7 +243,7 @@ impl Validator {
                 Ok(crl) => crl,
                 Err(e) => {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                        crl_uri_string,
+                        crl_uri,
                         format!("Could not parse CRL: {e}"),
                     ));
                     report.add_cert(ca_cert);
@@ -249,7 +256,7 @@ impl Validator {
                 .is_err()
             {
                 ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                    crl_uri_string,
+                    crl_uri,
                     "CRL not validly signed",
                 ));
                 report.add_cert(ca_cert);
@@ -257,22 +264,21 @@ impl Validator {
             };
 
             if crl.next_update() < when {
-                ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                    crl_uri_string,
-                    "CRL is stale",
-                ));
+                ca_cert.add_issue(ValidationIssue::with_uri_and_msg(crl_uri, "CRL is stale"));
                 report.add_cert(ca_cert);
                 return report;
             }
 
             if crl.contains(mft_cert.serial_number()) {
                 ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                    crl_uri_string,
+                    crl_uri,
                     "Manifest was revoked",
                 ));
                 report.add_cert(ca_cert);
                 return report;
             }
+
+            trace!("will validate {} manifest entries", mft_entries.len());
 
             // Ok.. the CRL and Manifest are okay..
             //
@@ -280,35 +286,30 @@ impl Validator {
             // objects on the manifest. But we can now validate each
             // of those objects individually and just report issues
             // if applicable, but continue with the next object.
+            let mut validated = 0;
             for (uri, hash) in mft_entries.into_iter() {
-                let uri_string = UriString::from(&uri);
-                let object = match data.objects.get(&uri_string) {
+                if validated > 1 && validated % 50 == 0 {
+                    trace!("   -- validated {validated} items");
+                }
+
+                let object = match data.objects.get(&uri) {
                     Some(object) => object,
                     None => {
-                        ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                            uri_string,
-                            "Object not found",
-                        ));
+                        ca_cert
+                            .add_issue(ValidationIssue::with_uri_and_msg(uri, "Object not found"));
                         continue;
                     }
                 };
 
                 if hash.verify(object.bytes()).is_err() {
                     ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                        uri_string,
+                        uri,
                         "Object does not match manifest hash",
                     ));
                     continue;
                 };
 
-                let path = uri.path();
-                let extension = if path.len() > 4 {
-                    &path[path.len() - 3..]
-                } else {
-                    ""
-                };
-
-                match extension {
+                match uri.extension() {
                     "roa" => match Roa::decode(object.bytes().clone(), strict) {
                         Ok(roa) => match roa.process(resource_cert, strict, |roa_cert| {
                             if crl.contains(roa_cert.serial_number()) {
@@ -319,19 +320,19 @@ impl Validator {
                             }
                         }) {
                             Ok((_roa_cert, roa)) => {
-                                let roa = ValidatedRoa::make(uri_string, roa);
+                                let roa = ValidatedRoa::make(uri, roa);
                                 ca_cert.add_roa(roa);
                             }
                             Err(e) => {
                                 ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                                    uri_string,
+                                    uri,
                                     format!("Invalid ROA: {e}"),
                                 ));
                             }
                         },
                         Err(e) => {
                             ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                                uri_string,
+                                uri,
                                 format!("Cannot decode ROA: {e}"),
                             ));
                         }
@@ -343,7 +344,7 @@ impl Validator {
                                     // This could be a CA certificate delegated to a child
                                     if crl.contains(child_cert.serial_number()) {
                                         ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                                            uri_string,
+                                            uri,
                                             "certificate was revoked",
                                         ));
                                     } else {
@@ -355,7 +356,7 @@ impl Validator {
                                                 ) {
                                                     Ok(cert_info) => {
                                                         ca_cert.add_child(ValidatedChild::new(
-                                                            uri_string,
+                                                            uri,
                                                             cert_info.clone(),
                                                         ));
                                                         child_certificates
@@ -364,7 +365,7 @@ impl Validator {
                                                     Err(e) => {
                                                         ca_cert.add_issue(
                                                             ValidationIssue::with_uri_and_msg(
-                                                                uri_string,
+                                                                uri,
                                                                 format!(
                                                                     "certificate was invalid: {e}"
                                                                 ),
@@ -376,7 +377,7 @@ impl Validator {
                                             Err(e) => {
                                                 ca_cert.add_issue(
                                                     ValidationIssue::with_uri_and_msg(
-                                                        uri_string,
+                                                        uri,
                                                         format!("certificate was invalid: {e}"),
                                                     ),
                                                 );
@@ -387,12 +388,13 @@ impl Validator {
                                     // This should be a BGPSec router (EE) certificate
                                     match child_cert.validate_router_at(resource_cert, strict, when)
                                     {
-                                        Ok(_) => ca_cert
-                                            .add_router_cert(ValidatedRouterCert::new(uri_string)),
+                                        Ok(_) => {
+                                            ca_cert.add_router_cert(ValidatedRouterCert::new(uri))
+                                        }
                                         Err(e) => {
                                             ca_cert.add_issue(
                                                 ValidationIssue::with_uri_and_msg(
-                                                    uri_string,
+                                                    uri,
                                                     format!("EE certificate found, but it is an invalid router certificate: {e}")
                                                 )
                                             );
@@ -402,7 +404,7 @@ impl Validator {
                             }
                             Err(e) => {
                                 ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                                    uri_string,
+                                    uri,
                                     format!("Cannot parse child certificate: {e}"),
                                 ));
                             }
@@ -418,18 +420,18 @@ impl Validator {
                             }
                         }) {
                             Ok((_ee, aspa)) => {
-                                ca_cert.add_aspa(ValidatedAspa::make(uri_string, aspa));
+                                ca_cert.add_aspa(ValidatedAspa::make(uri, aspa));
                             }
                             Err(e) => {
                                 ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                                    uri_string,
+                                    uri,
                                     format!("Invalid ASPA: {e}"),
                                 ));
                             }
                         },
                         Err(e) => {
                             ca_cert.add_issue(ValidationIssue::with_uri_and_msg(
-                                uri_string,
+                                uri,
                                 format!("Cannot parse aspa object: {e}"),
                             ));
                         }
@@ -439,12 +441,12 @@ impl Validator {
                         "Ghostbuster records are not yet validated.",
                     )),
                     _ => {
-                        // note.. we borrowed extension from uri so we can only use it to
-                        // format before moving uri.
-                        let msg = format!("unsupported object type: {extension}");
-                        ca_cert.add_issue(ValidationIssue::with_uri_and_msg(uri_string, msg));
+                        let msg = format!("unsupported object type: {}", uri.extension());
+                        ca_cert.add_issue(ValidationIssue::with_uri_and_msg(uri, msg));
                     }
                 }
+
+                validated += 1;
             }
         }
 
@@ -472,6 +474,13 @@ pub struct UriString(String);
 impl UriString {
     pub fn as_str(&self) -> &str {
         self.as_ref()
+    }
+
+    pub fn extension(&self) -> &str {
+        match self.as_str().rsplit_once('.') {
+            None => "",
+            Some((_left, extension)) => extension,
+        }
     }
 }
 
