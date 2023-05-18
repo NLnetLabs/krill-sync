@@ -385,12 +385,12 @@ impl fmt::Debug for Ipv6Prefix {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IgnoredObjectInfo {
-    uri: uri::Rsync,
+    uri: UriString,
     reason: String,
 }
 
 impl IgnoredObjectInfo {
-    pub fn new(uri: uri::Rsync, reason: impl fmt::Display) -> Self {
+    pub fn new(uri: UriString, reason: impl fmt::Display) -> Self {
         IgnoredObjectInfo {
             uri,
             reason: reason.to_string(),
