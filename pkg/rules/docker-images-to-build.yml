@@ -1,0 +1,6 @@
+# See: https://github.com/NLnetLabs/ploutos/blob/main/docs/docker_packaging.md#docker-build-rules
+---
+include:
+  - platform: "linux/amd64"
+    shortname: "amd64"
+    mode: "build"
