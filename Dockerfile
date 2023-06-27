@@ -1,5 +1,5 @@
 # Use the same alpine image for both build stages
-ARG BASE_IMG=alpine:3.13
+ARG BASE_IMG=alpine:3.18
 
 #
 # -- stage 1: build krill-sync
