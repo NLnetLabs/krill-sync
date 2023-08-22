@@ -11,4 +11,4 @@ exec /usr/local/bin/krill-sync \
     --rrdp-dir ${RRDP_DIR} \
     --rsync-dir ${RSYNC_DIR} \
     --state-dir ${STATE_DIR} \
-    ${RRDP_URL}
+    "$@"
