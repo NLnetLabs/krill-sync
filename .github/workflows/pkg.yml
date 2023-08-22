@@ -16,6 +16,9 @@ jobs:
   package:
     # See: https://github.com/NLnetLabs/ploutos
     uses: NLnetLabs/ploutos/.github/workflows/pkg-rust.yml@v7
+    secrets:
+      DOCKER_HUB_ID: ${{ vars.DOCKER_HUB_ID }}
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
     with:
       cross_build_args: --features static-tls
       cross_max_wait_mins: 20
