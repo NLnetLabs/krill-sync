@@ -17,19 +17,18 @@ jobs:
     #
     # Set @vN to the latest released version.
     #
-    uses: NLnetLabs/ploutos/.github/workflows/pkg-rust.yml@v1
+    uses: NLnetLabs/ploutos/.github/workflows/pkg-rust.yml@v7
     with:
       #
       # Define the desired build stages. Each xxx_rules(_path) setting is optional but at least one should be set.
       # See https://github.com/NLnetLabs/.github/tree/main/workflow-templates/pkg for templates for each of the files referenced
       # below.
       #
-      package_build_rules_path: pkg/rules/packages-to-build.yml
-      package_test_rules_path: pkg/rules/packages-to-test.yml
+      package_build_rules: pkg/rules/packages-to-build.yml
+      package_test_rules: pkg/rules/packages-to-test.yml
       package_test_scripts_path: pkg/test-scripts/test-<package>.sh
 
       #
       # Optional settings:
       #
       deb_extra_build_packages: libssl-dev
-      deb_maintainer: The NLnet Labs RPKI Team <rpki@nlnetlabs.nl>
