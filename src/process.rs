@@ -1,5 +1,7 @@
-use anyhow::Result;
-use log::info;
+use std::{process::Command, str::from_utf8};
+
+use anyhow::{anyhow, Result};
+use log::{debug, error, info};
 
 use crate::{config::Config, rrdp::RrdpState, rsync};
 
@@ -19,21 +21,101 @@ pub fn process(config: &Config) -> Result<()> {
     };
 
     // ===================================================================
-    // Update the RRDP state, if there are any changes in the source:
-    //  - remember if there was a change for writing a new rsync folder
+    // Update the RRDP state, if there are any changes in the source.
     // ===================================================================
-    let changed = rrdp_state.update(config.rrdp_max_deltas, &config.fetcher())?;
-
-    // Clean up any RRDP files and empty parent directories if they had been
-    // deprecated for more than the configured 'cleanup_after' time.
-    rrdp_state.clean(config)?;
+    //
+    // This will save new snapshot and delta files to the staging area
+    // directory on disk and returns a list of these files.
+    //
+    // If there are no changes, i.e. the notification file is not changed,
+    // then this list is empty and this is essentially a no-op.
+    // ===================================================================
+    let staged = match rrdp_state.update_staged(config)? {
+        Some(staged) => staged,
+        None => {
+            debug!("No changes in RRDP content found");
+            return Ok(());
+        }
+    };
 
     // ===================================================================
-    // If enabled, use the latest local RRDP snapshot to create a local
-    // copy of the repository in the format needed to serve it as an Rsync
-    // repository.
+    // Pre-validate with internal validator.
     // ===================================================================
+    //
+    // Pre-validate the staged files. In case there are NO configured
+    // TALs, then no actual validation is done, and any data from previous
+    // validation runs will be removed from the RrdpState.
+    //
+    // If any validation issues are found, then dependent on configuration
+    // we either just warn about this and continue (default), or exit with
+    // an error.
+    // ===================================================================
+    rrdp_state.pre_validate(config)?;
 
+    // ===================================================================
+    // Pre-validate with configured scripts.
+    // ===================================================================
+    //
+    // Call each configured script sequentially, and remember the exit
+    // status for each script. We want to run each script even if there
+    // is a failure, because it may be relevant to know if more than
+    // one script fails.
+    //
+    // Log issues if found and then dependent on configuration either
+    // continue, or exit.
+    // ===================================================================
+    {
+        if !config.pre_validation_scripts.is_empty() {
+            let mut issues = false;
+
+            for script in &config.pre_validation_scripts {
+                let output = Command::new(script).output()?;
+                if output.status.success() {
+                    info!(
+                        "Validate staged repository files using {} ---> OK",
+                        script.to_string_lossy()
+                    );
+                } else {
+                    issues = true;
+
+                    error!(
+                        "Validate staged repository files using {} ---> FAILED",
+                        script.to_string_lossy()
+                    );
+                    let std_output =
+                        from_utf8(&output.stdout).unwrap_or("could not parse stdout output");
+
+                    let error_output =
+                        from_utf8(&output.stderr).unwrap_or("could not parse stderr output");
+
+                    info!("{}", std_output);
+                    error!("{}", error_output);
+                }
+            }
+            if issues && config.tal_reject_invalid {
+                return Err(anyhow!("Validation of staged repository files failed."));
+            }
+        }
+    }
+
+    // ===================================================================
+    // Apply staged changes.
+    // ===================================================================
+    //
+    // - updates the RrdpState with new content,
+    // - deprecate old files
+    // - move new snapshot and deltas to the target RRDP dir
+    // - clean up old files, deprecated for the configured time
+    // - move new notification file to the target RRDP dir
+    rrdp_state.apply_staged_changed(staged, config)?;
+
+    // ===================================================================
+    // Update rsync state, if rsync support is enabled
+    // ===================================================================
+    //
+    // Uses the latest local RRDP snapshot to create  a local copy of the
+    // repository in the format needed to serve it as an Rsync repository.
+    //
     // Note that we do NOT fetch from a remote Rsync repository using the
     // Rsync protocol. Rather we fetch from a remote RRDP repository and
     // represent it locally in a form suitable for serving via an Rsync
@@ -48,18 +130,16 @@ pub fn process(config: &Config) -> Result<()> {
     // directories in quick succession.
     //
     // We will also clean out old rsync directories if they had been
-    // deprecated for more than the 'cleanup_after' time, even if there
-    // was no new data to write (i.e. change == false).
+    // deprecated for more than the 'cleanup_after' time,.
+    // ===================================================================
     if config.rsync_enabled() {
-        rsync::update_from_rrdp_state(&rrdp_state, changed, config)?;
+        rsync::update_from_rrdp_state(&rrdp_state, config)?;
     }
 
     // ===================================================================
     // Update the notification file if there was any change.
     // ===================================================================
-    if changed {
-        rrdp_state.write_notification()?;
-    }
+    rrdp_state.write_notification(config.rrdp_notify_delay)?;
 
     // ===================================================================
     // Persist state
