@@ -2,10 +2,12 @@ use std::{
     fmt::{self, Debug},
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use log::{info, warn};
 use reqwest::{
     blocking::Client,
     header::{ETAG, IF_NONE_MATCH, USER_AGENT},
@@ -16,6 +18,7 @@ use rpki::{
     rrdp::{Hash, NotificationFile},
     uri::{self, Https},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{config, file_ops};
 
@@ -24,6 +27,15 @@ pub enum FetchResponse {
     Data { bytes: Bytes, etag: Option<String> },
     Saved,
     UnModified,
+}
+
+impl FetchResponse {
+    pub fn try_into_data(self) -> Result<Bytes> {
+        match self {
+            FetchResponse::Data { bytes, .. } => Ok(bytes),
+            _ => Err(anyhow!("No data in response.")),
+        }
+    }
 }
 
 //------------ NotificationFileResponse --------------------------------------
@@ -47,7 +59,7 @@ impl NotificationFileResponse {
 }
 
 //------------ FetchSource ---------------------------------------------------
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FetchMode {
     Strict,
     Insecure, // accept self-signed or otherwise invalid HTTPs certificates.
@@ -60,7 +72,7 @@ impl FetchMode {
 }
 
 //------------ FetchSource ---------------------------------------------------
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FetchSource {
     File(PathBuf),
     Uri(uri::Https, FetchMode),
@@ -90,13 +102,13 @@ impl FetchSource {
         // we would need to build up the hash as we are writing the file
         // for later checking, and then we should remove the file again if
         // the hash did not match.
-        // Since the source files are trusted there should be no big deal
-        // in keeping them temporarily in memory.
         let fetch_response = match self {
             FetchSource::Uri(uri, mode) => {
+                info!("Retrieving file: {uri}");
                 let client = Client::builder()
                     .danger_accept_invalid_certs(mode.accept_insecure())
                     .danger_accept_invalid_hostnames(mode.accept_insecure())
+                    .timeout(Duration::from_secs(60))
                     .build()?;
 
                 let mut request_builder = client.get(uri.as_str());
@@ -162,6 +174,7 @@ impl FetchSource {
 
         if let Some(target_file) = target_file {
             if let FetchResponse::Data { bytes, .. } = &fetch_response {
+                info!("Writing file to: {}", target_file.to_string_lossy());
                 file_ops::write_buf(target_file, bytes)?;
                 Ok(FetchResponse::Saved)
             } else {
@@ -220,7 +233,7 @@ impl FromStr for FetchSource {
 
 //------------ FetchMap ------------------------------------------------------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FetchMap {
     base_uri: uri::Https,
     base_fetch: FetchSource,
@@ -251,7 +264,7 @@ impl FetchMap {
 
 //------------ Fetcher -------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Fetcher {
     notification_uri: uri::Https,
     fetch_map: Option<FetchMap>,
@@ -292,6 +305,18 @@ impl Fetcher {
     }
 
     pub fn retrieve_file(&self, uri: &Https, hash: Hash, target: &Path) -> Result<()> {
+        if let Ok(existing) = file_ops::read_file(target) {
+            // check if the downloaded file matches the hash. If not log an error and
+            // download the new file. If it matches, then just continue.
+            if !hash.matches(&existing) {
+                warn!(
+                    "Already downloaded file does not match hash, will download again, for uri: {}",
+                    uri
+                );
+            } else {
+                return Ok(());
+            }
+        }
         let source = self.resolve_source(uri)?;
         source
             .fetch(Some(hash), None, Some(target))

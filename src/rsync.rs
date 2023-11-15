@@ -22,11 +22,7 @@ use crate::{
     util::{self, Time},
 };
 
-pub fn update_from_rrdp_state(
-    rrdp_state: &RrdpState,
-    changed: bool,
-    config: &Config,
-) -> Result<()> {
+pub fn update_from_rrdp_state(rrdp_state: &RrdpState, config: &Config) -> Result<()> {
     // Check that there is a current snapshot, if not, there is no work
     if rrdp_state.snapshot_path().is_none() {
         return Ok(());
@@ -42,22 +38,20 @@ pub fn update_from_rrdp_state(
 
     let new_revision = RsyncRevision { session_id, serial };
 
-    if changed {
-        let mut writer = RsyncFromSnapshotWriter {
-            out_path: new_revision.path(config),
-            include_host_and_module: config.rsync_include_host,
-        };
-        writer.create_out_path_if_missing()?;
-        writer.for_snapshot_path(&snapshot_path)?;
+    let mut writer = RsyncFromSnapshotWriter {
+        out_path: new_revision.path(config),
+        include_host_and_module: config.rsync_include_host,
+    };
+    writer.create_out_path_if_missing()?;
+    writer.for_snapshot_path(&snapshot_path)?;
 
-        if config.rsync_dir_use_symlinks() {
-            symlink_current_to_new_revision_dir(&new_revision, config)?;
-        } else {
-            rename_new_revision_dir_to_current(&new_revision, &rsync_state, config)?;
-        }
-
-        rsync_state.update_current(new_revision);
+    if config.rsync_dir_use_symlinks() {
+        symlink_current_to_new_revision_dir(&new_revision, config)?;
+    } else {
+        rename_new_revision_dir_to_current(&new_revision, &rsync_state, config)?;
     }
+
+    rsync_state.update_current(new_revision);
 
     rsync_state.clean_old(config)?;
     rsync_state.persist(config)?;

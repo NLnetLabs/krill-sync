@@ -1,0 +1,4 @@
+<notification xmlns="http://www.ripe.net/rpki/rrdp" version="1" session_id="cd0c701d-ff09-4e95-8f2a-fa24de875fb5" serial="3">
+  <snapshot uri="https://localhost:3000/rrdp/cd0c701d-ff09-4e95-8f2a-fa24de875fb5/3/0ab6e84be3ec9561/snapshot.xml" hash="f5ab9708660f2bf2f9ec0d61ef0c0ceb3fb5bfeb0b1449a00eab1cbdaa3449f9"/>
+  <delta serial="3" uri="https://localhost:3000/rrdp/cd0c701d-ff09-4e95-8f2a-fa24de875fb5/3/0ab6e84be3ec9561/delta.xml" hash="09e110c0350a673334a3d75a9cc81ddf47fb4b05693e47c383c45f92fa2ade62"/>
+</notification>
