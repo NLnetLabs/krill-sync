@@ -3,10 +3,11 @@ use std::{collections::HashMap, convert::TryFrom, fmt, str::FromStr};
 use rpki::{
     repository::{
         aspa::AsProviderAttestation,
-        resources::{AddressFamily, Prefix, ResourceSet},
+        resources::{Prefix, ResourceSet},
         roa::RouteOriginAttestation,
         ResourceCert,
     },
+    resources::Asn,
     uri,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -168,7 +169,7 @@ impl ValidatedChild {
 
 impl ValidatedRoa {
     pub fn make(uri: UriString, roa: RouteOriginAttestation) -> Self {
-        let asn = AsNumber(roa.as_id().into_u32());
+        let asn = roa.as_id();
 
         let mut vrps = vec![];
 
@@ -198,7 +199,7 @@ impl ValidatedRoa {
 ///       sub-projects.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RoaPayload {
-    asn: AsNumber,
+    asn: Asn,
     prefix: TypedPrefix,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_length: Option<u8>,
@@ -210,30 +211,14 @@ pub struct RoaPayload {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ValidatedAspa {
     uri: UriString,
-    customer: AsNumber,
-    providers: Vec<AspaProvider>,
+    customer: Asn,
+    providers: Vec<Asn>,
 }
 
 impl ValidatedAspa {
     pub fn make(uri: UriString, aspa: AsProviderAttestation) -> Self {
-        let customer = AsNumber(aspa.customer_as().into_u32());
-        let providers = aspa
-            .provider_as_set()
-            .iter()
-            .map(|p| {
-                let afi_limit = match p.afi_limit() {
-                    None => AspaLimit::None,
-                    Some(limit) => match limit {
-                        AddressFamily::Ipv4 => AspaLimit::IPv4,
-                        AddressFamily::Ipv6 => AspaLimit::IPv6,
-                    },
-                };
-                AspaProvider {
-                    provider: AsNumber(p.provider().into_u32()),
-                    afi_limit,
-                }
-            })
-            .collect();
+        let customer = aspa.customer_as();
+        let providers = aspa.provider_as_set().iter().collect();
 
         ValidatedAspa {
             uri,
@@ -242,24 +227,6 @@ impl ValidatedAspa {
         }
     }
 }
-
-/// TODO: Use krill type.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct AspaProvider {
-    provider: AsNumber,
-    afi_limit: AspaLimit,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum AspaLimit {
-    None,
-    IPv4,
-    IPv6,
-}
-
-//------------ AsNumber ----------------------------------------------------
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct AsNumber(u32);
 
 //------------ TypedPrefix -------------------------------------------------
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
