@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use filetime::{set_file_mtime, FileTime};
 use log::{info, warn};
 use rpki::{
-    repository::{sigobj::SignedObject, Cert, Crl, Manifest, Roa},
+    repository::{sigobj::SignedObject, Cert, Crl},
     rrdp::ProcessSnapshot,
 };
 use serde::{Deserialize, Serialize};
@@ -345,15 +345,16 @@ fn fix_since(path: &Path, data: &[u8]) -> Result<()> {
         Cert::decode(data).map(|cert| cert.validity().not_before())
     } else if path_str.ends_with(".crl") {
         Crl::decode(data).map(|crl| crl.this_update())
-    } else if path_str.ends_with(".mft") {
-        Manifest::decode(data, false).map(|mft| mft.this_update())
-    } else if path_str.ends_with(".roa") {
-        Roa::decode(data, false).map(|roa| roa.cert().validity().not_before())
     } else {
         // Try to parse this as a generic RPKI signed object
-        SignedObject::decode(data, false).map(|signed| signed.cert().validity().not_before())
+        // i.e. MFT/ROA/ASPA/GBR/$future_thing
+        SignedObject::decode(data, false).map(|signed| {
+            signed
+                .signing_time() // all implementations set this....
+                .unwrap_or(signed.cert().validity().not_before()) // but just in case
+        })
     }
-    .map_err(|_| anyhow!("Cannot parse object at: {} to derive mtime", path_str))?;
+    .map_err(|_| anyhow!("Will not change mtime for: {}. Cannot parse it.", path_str))?;
 
     let mtime = FileTime::from_unix_time(time.timestamp(), 0);
     set_file_mtime(path, mtime).map_err(|e| {
@@ -410,7 +411,7 @@ mod tests {
             check_mtime(
                 &dir,
                 "rsync/Acme-Corp-Intl/3/A4E953A4133AC82A46AE19C2E7CC635B51CD11D3.mft",
-                1622637098,
+                1622637398,
             );
 
             check_mtime(
@@ -419,7 +420,7 @@ mod tests {
                 1622621702,
             );
 
-            check_mtime(&dir, "rsync/Acme-Corp-Intl/3/AS40224.roa", 1620657233);
+            check_mtime(&dir, "rsync/Acme-Corp-Intl/3/AS40224.roa", 1620657533);
         });
     }
 }
