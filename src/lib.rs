@@ -13,3 +13,4 @@ pub mod process;
 pub mod rrdp;
 pub mod rsync;
 pub mod util;
+pub mod validation;

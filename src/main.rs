@@ -9,7 +9,7 @@ use log::debug;
 
 fn main() {
     if let Err(err) = configure_and_try_main() {
-        eprintln!("{:?}", err);
+        eprintln!("{err:?}");
         std::process::exit(1);
     }
 }
@@ -30,8 +30,12 @@ fn lock(config: &Config) -> Result<LockFile> {
             "State directory '{}' does not exist yet, will try to create it.",
             config.state_dir.display()
         );
-        std::fs::create_dir_all(&config.state_dir)
-            .with_context(|| format!("Cannot create state directory: {}", config.state_dir.display()))?;
+        std::fs::create_dir_all(&config.state_dir).with_context(|| {
+            format!(
+                "Cannot create state directory: {}",
+                config.state_dir.display()
+            )
+        })?;
     }
 
     let lock_file_path = config.lock_file();

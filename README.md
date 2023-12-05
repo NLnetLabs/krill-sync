@@ -8,6 +8,10 @@ and rsync servers are used to make the RPKI repository content available.
 
 ## Changelog
 
+March 2023 v0.2.2
+
+This release adds support for pre-validation of a source repository.
+
 29-11-2022 v0.2.1
 
 This release includes fixes for the following issues:
@@ -221,28 +225,38 @@ application state rather than user state.
 
 ```
 krill-sync --help
-krill-sync 0.2.0
+krill-sync 0.2.2
 A tool to synchronize an RRDP and/or Rsync server with a remote RRDP publication point.
 
 USAGE:
     krill-sync [FLAGS] [OPTIONS] <notification-uri>
 
 FLAGS:
-    -h, --help             Prints help information
-        --insecure         Whether or not localhost connections and self-signed certificates are allowed
-    -q, --quiet            Quiet mode (no warnings or informative messages, only errors)
-        --rsync-disable    Disable writing the rsync files
-    -V, --version          Prints version information
-    -v, --verbose          Verbose mode (-v, -vv, -vvv, etc.)
+    -h, --help                  Prints help information
+        --insecure              Whether or not localhost connections and self-signed certificates are allowed
+    -q, --quiet                 Quiet mode (no warnings or informative messages, only errors)
+        --rsync-disable         Disable writing the rsync files
+        --rsync-include-host    Support different rsync base URIs, include host and module:
+                                <rsync_dir>/current/<host>/<module>/..
+        --tal-reject-invalid    If true: reject if there are objects invalid under configured TAL(s) Note that this is
+                                limited to objects that are expected to be present and valid under the TAL(s). Other
+                                objects are not validated and are always accepted. Restrictions on this MUST NOT be
+                                enforced in krill-sync, and unfortunately cannot really be enforced in the Publication
+                                Server either
+    -V, --version               Prints version information
+    -v, --verbose               Verbose mode (-v, -vv, -vvv, etc.)
 
 OPTIONS:
-        --cleanup-after <seconds>        Remove unreferenced files and directories older than X seconds [default: 600]
+        --cleanup-after <seconds>        Remove unreferenced files and directories older than X seconds [default: 3600]
         --rrdp-dir <dir>                 The directory to write RRDP files to [default: /var/lib/krill-sync/rrdp]
         --rrdp-max-deltas <number>       Optional hard upper limit to the number of deltas
         --rrdp-notify-delay <seconds>    Delay seconds before writing the notification.xml file [default: 0]
         --rsync-dir <dir>                The directory to write Rsync files to [default: /var/lib/krill-sync/rsync]
-        --source_uri_base <uri>          Base uri for the notify file on the back-end server. Must end with a slash
+        --source_uri_base <uri>          Slash terminated base uri for the notify file source
     -s, --state-dir <dir>                The directory to write state to [default: /var/lib/krill-sync]
+        --tal <tal file>...              Optional TAL file(s) used to warn about, or reject, invalid content. NOTE: if
+                                         you use this as the last option, be sure to add '--' to avoid that the
+                                         <notification-uri> argument is interpreted as an additional TAL file location
 
 ARGS:
     <notification-uri>    The public RRDP notification URI
