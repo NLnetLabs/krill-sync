@@ -4,12 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 
 use filetime::{set_file_mtime, FileTime};
-use log::{info, warn};
+use log::{error, info, warn};
 use rpki::{
-    repository::{sigobj::SignedObject, Cert, Crl, Manifest, Roa},
+    repository::{sigobj::SignedObject, Cert, Crl},
     rrdp::ProcessSnapshot,
 };
 use serde::{Deserialize, Serialize};
@@ -328,9 +328,7 @@ impl ProcessSnapshot for RsyncFromSnapshotWriter {
             )
         })?;
 
-        if let Err(e) = fix_since(&path, &bytes) {
-            warn!("{}", e);
-        }
+        fix_since(&path, &bytes);
 
         Ok(())
     }
@@ -339,32 +337,36 @@ impl ProcessSnapshot for RsyncFromSnapshotWriter {
 // Try to fix the modification time for a repository object.
 // This is needed because otherwise some clients will always think
 // there is an update.
-fn fix_since(path: &Path, data: &[u8]) -> Result<()> {
+fn fix_since(path: &Path, data: &[u8]) {
     let path_str = path.to_string_lossy();
+
     let time = if path_str.ends_with(".cer") {
         Cert::decode(data).map(|cert| cert.validity().not_before())
     } else if path_str.ends_with(".crl") {
         Crl::decode(data).map(|crl| crl.this_update())
-    } else if path_str.ends_with(".mft") {
-        Manifest::decode(data, false).map(|mft| mft.this_update())
-    } else if path_str.ends_with(".roa") {
-        Roa::decode(data, false).map(|roa| roa.cert().validity().not_before())
     } else {
         // Try to parse this as a generic RPKI signed object
-        SignedObject::decode(data, false).map(|signed| signed.cert().validity().not_before())
+        // i.e. MFT/ROA/ASPA/GBR/$future_thing
+        SignedObject::decode(data, false).map(|signed| {
+            signed
+                .signing_time() // all implementations set this....
+                .unwrap_or(signed.cert().validity().not_before()) // but just in case
+        })
     }
-    .map_err(|_| anyhow!("Cannot parse object at: {} to derive mtime", path_str))?;
+    .ok();
 
-    let mtime = FileTime::from_unix_time(time.timestamp(), 0);
-    set_file_mtime(path, mtime).map_err(|e| {
-        anyhow!(
-            "Cannot modify mtime for object at: {}, error: {}",
-            path_str,
-            e
-        )
-    })?;
-
-    Ok(())
+    match time {
+        None => warn!("Cannot parse object at: {}. Will not modify time", path_str),
+        Some(time) => {
+            let mtime = FileTime::from_unix_time(time.timestamp(), 0);
+            if let Err(e) = set_file_mtime(path, mtime) {
+                error!(
+                    "Cannot modify mtime for object at: {}, error: {}",
+                    path_str, e
+                )
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -410,7 +412,7 @@ mod tests {
             check_mtime(
                 &dir,
                 "rsync/Acme-Corp-Intl/3/A4E953A4133AC82A46AE19C2E7CC635B51CD11D3.mft",
-                1622637098,
+                1622637398,
             );
 
             check_mtime(
@@ -419,7 +421,7 @@ mod tests {
                 1622621702,
             );
 
-            check_mtime(&dir, "rsync/Acme-Corp-Intl/3/AS40224.roa", 1620657233);
+            check_mtime(&dir, "rsync/Acme-Corp-Intl/3/AS40224.roa", 1620657533);
         });
     }
 }
