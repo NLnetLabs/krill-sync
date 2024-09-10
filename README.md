@@ -6,42 +6,6 @@ Server to make a consistent local copy of that data.
 This is intended to facilitate a redundant set up where one or more public https
 and rsync servers are used to make the RPKI repository content available.
 
-## Changelog
-
-March 2023 v0.2.2
-
-This release adds support for pre-validation of a source repository.
-
-29-11-2022 v0.2.1
-
-This release includes fixes for the following issues:
-- Support empty snapshot (#62)
-- Increase cleanup-after default to 1 hour (#54)
-- Write new notification file only on change (#55)
-- Respect --insecure option (#59)
-
-
-13-12-2021 v0.2.0
-
-The code has had a massive overhaul since version 0.1.x. It has been simplified and
-has much better test coverage.
-
-Functionality should be compatible to the known requirements for 0.1.x - but the
-CLI arguments have also changed. If you are looking to upgrade from 0.1.x to
-this version, please make sure that you read the updated text below and test
-things thoroughly. In case you run into any issues, do not hesitate to contact
-us or make an issue in GitHub. 
-
-
-29-04-2021 v0.1.3
-
-In this version we added the following:
-- Allow a configurable delay before writing the RRDP notification.xml file (#5)
-- Use a symlink for the current rsync directory (#2)
-- Debian packages (#11)
-- Docker file (#9)
-
-We did not make official releases, nor dir we keep any changelogs for earlier versions.
 
 ## Installation
 
