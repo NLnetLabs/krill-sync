@@ -58,7 +58,6 @@ impl Replace for PathBuf {
 #[derive(Clone, Debug, StructOpt)]
 #[structopt(
     about = "A tool to synchronize an RRDP and/or Rsync server with a remote RRDP publication point.",
-    long_version = concat!(crate_version!(), " (", env!("VERGEN_SHA_SHORT"), ")"),
 )]
 pub struct Config {
     // The number of occurrences of the `v/verbose` flag
