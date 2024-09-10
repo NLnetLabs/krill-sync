@@ -2,6 +2,11 @@
 
 ## Unreleased next version
 
+Bug fixes
+
+Other changes
+
+
 ## 0.3.0-rc1
 
 Released 2024-09-10.
