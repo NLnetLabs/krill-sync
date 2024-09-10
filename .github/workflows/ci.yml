@@ -1,13 +1,13 @@
 name: ci
 on:
   push:
-    branches: [ master ]
+    branches:
+      - main
+      - series-*
   pull_request:
-    branches: [ master ]
-
-env:
-  CARGO_TERM_COLOR: always
-
+    branches:
+      - main
+      - series-*
 jobs:
   test:
     name: test
@@ -15,8 +15,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        rust: [1.42.0, stable]
-      fail-fast: false
+        rust: [1.70.0, stable]
     steps:
     - name: Checkout repository
       uses: actions/checkout@v2
@@ -24,9 +23,9 @@ jobs:
       uses: hecrj/setup-rust-action@v1
       with:
         rust-version: ${{ matrix.rust }}
-    - if: matrix.rust != 'nightly'
+    - if: matrix.rust == 'stable'
       run: rustup component add clippy
-    - if: matrix.rust != 'nightly'
+    - if: matrix.rust == 'stable'
       run: cargo clippy -- -D warnings
-    - run: cargo build --verbose
+    - run: cargo build --verbose --locked
     - run: cargo test --verbose
