@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::usize;
 
 use anyhow::{anyhow, Result};
 use log::LevelFilter;
@@ -24,8 +23,9 @@ pub const USER_AGENT: &str = concat!(crate_name!(), "/", crate_version!());
 /// that it becomes, if unreferenced, eligible for cleanup.
 pub const DEFAULT_CLEANUP_SECONDS: &str = "3600"; // 60 minutes
 
-/// The default location to write our process ID to so that on invocation we can
-/// check if we are already running. Cleared on boot according to the Linux FHS.
+/// The default location to write our process ID.
+///
+/// Cleared on boot according to the Linux FHS.
 /// See: https://www.pathname.com/fhs/pub/fhs-2.3.html#VARRUNRUNTIMEVARIABLEDATA
 pub const DEFAULT_PID_FILE_PATH: &str = concat!("/var/run/", crate_name!(), ".pid");
 
