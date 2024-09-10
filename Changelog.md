@@ -2,7 +2,9 @@
 
 ## Unreleased next version
 
-New
+## 0.3.0-rc1
+
+Released 2024-09-10.
 
 * Added support for pre-validation of a source repository.
 
