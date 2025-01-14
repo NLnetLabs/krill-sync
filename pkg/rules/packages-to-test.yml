@@ -2,13 +2,12 @@
 pkg:
   - "krill-sync"
 image:
-  - "ubuntu:xenial" # ubuntu/16.04
-  - "ubuntu:bionic" # ubuntu/18.04
   - "ubuntu:focal" # ubuntu/20.04
   - "ubuntu:jammy" # ubuntu/22.04
-  # - 'debian:stretch'  # debian/9 - LXC image is no longer available on images.linuxcontainers.org
+  - "ubuntu:noble" # ubuntu/24.04
   - "debian:buster" # debian/10
   - "debian:bullseye" # debian/11
+  - "debian:bookworm" # debian/12
 mode:
   - "fresh-install"
 target:
