@@ -56,18 +56,17 @@ copyright = "Copyright (c) 2021, NLnet Labs. All rights reserved."
 assets = [["target/release/krill-sync", "/usr/bin/krill-sync", "755"]]
 
 # List target variants
-
-[package.metadata.deb.variants.ubuntu-xenial]
-
-[package.metadata.deb.variants.ubuntu-bionic]
-
 [package.metadata.deb.variants.ubuntu-focal]
 
-[package.metadata.deb.variants.debian-stretch]
+[package.metadata.deb.variants.ubuntu-jammy]
+
+[package.metadata.deb.variants.ubuntu-noble]
 
 [package.metadata.deb.variants.debian-buster]
 
 [package.metadata.deb.variants.debian-bullseye]
+
+[package.metadata.deb.variants.debian-bookworm]
 
 # END DEBIAN PACKAGING
 # ------------------------------------------------------------------------------

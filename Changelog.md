@@ -6,6 +6,9 @@ Bug fixes
 
 Other changes
 
+* Drop support for Ubuntu 16.04, 18.04, and Debian 9
+* Add support for Ubuntu 24.04 and Debian 12
+
 
 ## 0.3.0-rc1
 
