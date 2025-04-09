@@ -11,6 +11,13 @@ Other changes
 
 Released 2025-04-09.
 
+No changes compared to 0.3.1-rc1.
+
+
+## 0.3.1-rc1
+
+Released 2025-04-09.
+
 Bug fixes
 
 Other changes

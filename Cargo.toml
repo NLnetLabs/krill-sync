@@ -1,6 +1,6 @@
 [package]
 name = "krill-sync"
-version = "0.3.1-rc1"
+version = "0.3.1"
 license = "BSD-3-Clause"
 edition = "2018"
 authors = ["NLnet Labs <rpki-team@nlnetlabs.nl>"]
