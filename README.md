@@ -40,13 +40,13 @@ sudo apt install krill-sync
 
 ### Build with Cargo
 
-For Ubuntu 20.04 with Rust 1.51.0:
+For Ubuntu 24.04 with Rust 1.86.0:
 
 ```
 apt update && apt install -y build-essential curl libssl-dev openssl pkg-config
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
-cargo install --git https://github.com/NLnetLabs/krill-sync.git --tag v0.2.0-rc1 --locked
+cargo install --git https://github.com/NLnetLabs/krill-sync.git --tag v0.3.0-rc1 --locked
 ```
 
 ## Introduction

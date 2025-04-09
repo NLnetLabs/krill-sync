@@ -6,6 +6,16 @@ Bug fixes
 
 Other changes
 
+
+## 0.3.1-rc1
+
+Released 2025-04-09.
+
+Bug fixes
+
+Other changes
+
+* Update dependencies
 * Drop support for Ubuntu 16.04, 18.04, and Debian 9
 * Add support for Ubuntu 24.04 and Debian 12
 
