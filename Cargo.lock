@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "krill-sync"
-version = "0.3.1-dev"
+version = "0.3.1-rc1"
 dependencies = [
  "anyhow",
  "base64 0.12.3",
