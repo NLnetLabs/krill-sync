@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased next version
+## 0.3.2
 
-Bug fixes
+Released 2025-01-22.
 
-Other changes
+* Update dependencies
+* Drop support for Debian Buster
+* Add support for Debian Trixie
 
 
-## 0.3.1-rc1
+## 0.3.1
 
 Released 2025-04-09.
 
