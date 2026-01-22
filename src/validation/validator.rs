@@ -2,6 +2,7 @@ use core::fmt;
 use std::{collections::HashMap, convert::TryFrom, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use chrono::Duration;
 use log::{debug, info, trace, warn};
@@ -854,7 +855,7 @@ where
     D: Deserializer<'de>,
 {
     let some = String::deserialize(d)?;
-    let dec = base64::decode(some).map_err(de::Error::custom)?;
+    let dec = STANDARD.decode(some).map_err(de::Error::custom)?;
     Ok(Bytes::from(dec))
 }
 
@@ -862,7 +863,7 @@ pub fn ser_bytes<S>(b: &Bytes, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    base64::encode(b).serialize(s)
+    STANDARD.encode(b).serialize(s)
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use std::fmt;
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use chrono::{Local, TimeZone};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -53,7 +54,7 @@ where
     D: Deserializer<'de>,
 {
     let base64_str = String::deserialize(d)?;
-    let bytes = base64::decode(base64_str).map_err(serde::de::Error::custom)?;
+    let bytes = STANDARD.decode(base64_str).map_err(serde::de::Error::custom)?;
     Ok(Bytes::from(bytes))
 }
 
@@ -61,7 +62,7 @@ pub fn ser_bytes<S>(b: &Bytes, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    base64::encode(b).serialize(s)
+    STANDARD.encode(b).serialize(s)
 }
 
 //------------ Uuid ----------------------------------------------------------

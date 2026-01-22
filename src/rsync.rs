@@ -348,9 +348,7 @@ fn fix_since(path: &Path, data: &[u8]) {
         // Try to parse this as a generic RPKI signed object
         // i.e. MFT/ROA/ASPA/GBR/$future_thing
         SignedObject::decode(data, false).map(|signed| {
-            signed
-                .signing_time() // all implementations set this....
-                .unwrap_or(signed.cert().validity().not_before()) // but just in case
+            signed.signing_time()
         })
     }
     .ok();
