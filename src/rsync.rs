@@ -185,7 +185,7 @@ impl RsyncDirState {
     /// Updates the current revision for this state, moves a possible
     /// existing current state to old.
     fn update_current(&mut self, current: RsyncRevision) {
-        let existing = std::mem::replace(&mut self.current, Some(current));
+        let existing = self.current.replace(current);
         if let Some(existing) = existing {
             self.old.push(existing.deprecate());
         }
