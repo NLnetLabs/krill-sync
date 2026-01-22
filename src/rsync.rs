@@ -185,7 +185,7 @@ impl RsyncDirState {
     /// Updates the current revision for this state, moves a possible
     /// existing current state to old.
     fn update_current(&mut self, current: RsyncRevision) {
-        let existing = std::mem::replace(&mut self.current, Some(current));
+        let existing = self.current.replace(current);
         if let Some(existing) = existing {
             self.old.push(existing.deprecate());
         }
@@ -348,9 +348,7 @@ fn fix_since(path: &Path, data: &[u8]) {
         // Try to parse this as a generic RPKI signed object
         // i.e. MFT/ROA/ASPA/GBR/$future_thing
         SignedObject::decode(data, false).map(|signed| {
-            signed
-                .signing_time() // all implementations set this....
-                .unwrap_or(signed.cert().validity().not_before()) // but just in case
+            signed.signing_time()
         })
     }
     .ok();
