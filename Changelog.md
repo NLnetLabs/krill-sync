@@ -5,7 +5,7 @@
 Released 2025-01-22.
 
 * Update dependencies
-* Drop support for Debian Buster
+* Drop support for Debian Buster and Ubuntu Focal
 * Add support for Debian Trixie
 
 
