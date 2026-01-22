@@ -62,11 +62,11 @@ assets = [["target/release/krill-sync", "/usr/bin/krill-sync", "755"]]
 
 [package.metadata.deb.variants.ubuntu-noble]
 
-[package.metadata.deb.variants.debian-buster]
-
 [package.metadata.deb.variants.debian-bullseye]
 
 [package.metadata.deb.variants.debian-bookworm]
+
+[package.metadata.deb.variants.debian-trixie]
 
 # END DEBIAN PACKAGING
 # ------------------------------------------------------------------------------
