@@ -330,7 +330,7 @@ impl fmt::Display for Ipv4Prefix {
 
 impl fmt::Debug for Ipv4Prefix {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", &self)
+        write!(f, "{}", self)
     }
 }
 
@@ -346,7 +346,7 @@ impl fmt::Display for Ipv6Prefix {
 
 impl fmt::Debug for Ipv6Prefix {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", &self)
+        write!(f, "{}", self)
     }
 }
 
