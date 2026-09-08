@@ -17,12 +17,12 @@ To use this repository, add the line below that corresponds to your operating sy
 your `/etc/apt/sources.list` or `/etc/apt/sources.list.d/`
 
 ```bash
-deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ buster main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ bullseye main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ bookworm main
-deb [arch=amd64] https://packages.nlnetlabs.nl/linux/ubuntu/ focal main
+deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ trixie main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/ubuntu/ jammy main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/ubuntu/ noble main
+deb [arch=amd64] https://packages.nlnetlabs.nl/linux/ubuntu/ resolute main
 ```
 Then run the following commands.
 
@@ -46,7 +46,7 @@ For Ubuntu 24.04 with Rust 1.86.0:
 apt update && apt install -y build-essential curl libssl-dev openssl pkg-config
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
-cargo install --git https://github.com/NLnetLabs/krill-sync.git --tag v0.3.0-rc1 --locked
+cargo install --git https://github.com/NLnetLabs/krill-sync.git --locked
 ```
 
 ## Introduction

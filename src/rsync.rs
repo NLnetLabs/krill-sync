@@ -272,7 +272,7 @@ impl RsyncFromSnapshotWriter {
             std::fs::create_dir_all(&self.out_path).with_context(|| {
                 format!(
                     "Cannot create output directory for rsync at {}",
-                    &self.out_path.display()
+                    self.out_path.display()
                 )
             })
         } else {
