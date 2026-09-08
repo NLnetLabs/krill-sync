@@ -17,7 +17,6 @@ To use this repository, add the line below that corresponds to your operating sy
 your `/etc/apt/sources.list` or `/etc/apt/sources.list.d/`
 
 ```bash
-deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ bullseye main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ bookworm main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/debian/ trixie main
 deb [arch=amd64] https://packages.nlnetlabs.nl/linux/ubuntu/ jammy main

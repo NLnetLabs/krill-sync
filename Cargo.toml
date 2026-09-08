@@ -63,8 +63,6 @@ assets = [["target/release/krill-sync", "/usr/bin/krill-sync", "755"]]
 
 [package.metadata.deb.variants.ubuntu-resolute]
 
-[package.metadata.deb.variants.debian-bullseye]
-
 [package.metadata.deb.variants.debian-bookworm]
 
 [package.metadata.deb.variants.debian-trixie]
