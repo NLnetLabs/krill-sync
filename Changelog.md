@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3
+
+Released 2026-09-08.
+
+* Update dependencies
+* Add support for Ubuntu Resolute
+* Drop support for Debian Bullseye
+
+
 ## 0.3.2
 
 Released 2025-01-22.

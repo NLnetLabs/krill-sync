@@ -1,6 +1,6 @@
 [package]
 name = "krill-sync"
-version = "0.3.2"
+version = "0.3.3"
 rust-version = "1.86"
 license = "BSD-3-Clause"
 edition = "2018"
