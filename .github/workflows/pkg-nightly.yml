@@ -1,8 +1,9 @@
 name: Nightly builds
 
 on:
-  schedule:
-    - cron: "0 0 * * *"
+  push:
+    branches:
+      - "main"
 
   # Allow manually triggering the workflow.
   workflow_dispatch:
@@ -38,19 +39,19 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
-          path: ./public
+          path: ./nightly
           pattern: "!(tmp*)"
       - name: Create index for the artifacts
         uses: gacts/directory-listing@v1
         with:
-          target: ./public
+          target: ./nightly
           footer: "Updated at ${{ github.event.repository.updated_at }}"
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './public'
+          path: './nightly'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
