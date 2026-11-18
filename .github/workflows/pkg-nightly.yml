@@ -45,7 +45,6 @@ jobs:
         uses: gacts/directory-listing@v1
         with:
           target: ./nightly
-          footer: "Updated at ${{ github.event.repository.updated_at }}"
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
