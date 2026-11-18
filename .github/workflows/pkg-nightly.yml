@@ -1,0 +1,40 @@
+name: Nightly builds
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+
+  # Allow manually triggering the workflow.
+  workflow_dispatch:
+
+jobs:
+  package:
+    uses: NLnetLabs/ploutos/.github/workflows/pkg-rust.yml@v10
+    with:
+      cross_build_args: --features static-tls
+      cross_max_wait_mins: 20
+
+      package_build_rules: pkg/rules/packages-to-build.yml
+      package_test_rules: pkg/rules/packages-to-test.yml
+      package_test_scripts_path: pkg/test-scripts/test-<package>.sh
+
+      deb_extra_build_packages: libssl-dev
+  upload:
+    runs-on: ubuntu-latest
+    needs: package
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./public
+          pattern: "!(tmp*)"
+      - name: Create index for the artifacts
+        uses: gacts/directory-listing@v1
+        with:
+          target: ./public
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+
