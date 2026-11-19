@@ -39,7 +39,7 @@ sudo apt install krill-sync
 
 ### Build with Cargo
 
-For Ubuntu 24.04 with Rust 1.86.0:
+For Ubuntu 24.04 with Rust 1.89.0:
 
 ```
 apt update && apt install -y build-essential curl libssl-dev openssl pkg-config
