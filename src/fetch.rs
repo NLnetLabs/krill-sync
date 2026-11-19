@@ -1,7 +1,7 @@
 use std::{
-    fmt::{self, Debug},
-    path::{Path, PathBuf},
-    str::FromStr,
+    fmt::{self, Debug}, 
+    path::{Component, Path, PathBuf}, 
+    str::FromStr, 
     time::Duration,
 };
 
@@ -173,6 +173,16 @@ impl FetchSource {
         }
 
         if let Some(target_file) = target_file {
+            // Verify the path does not contain ../
+            // This is not an exhaustive check, but better than nothing.
+            // It is assumed you are using krill-sync with your own Krill
+            // instance, and not do path traversal on your own instance.
+            if target_file.components().any(|p| p == Component::ParentDir) {
+                return Err(anyhow!(
+                    "Path {} contains illegal parent dir reference",
+                    target_file.display(),
+                ));
+            }
             if let FetchResponse::Data { bytes, .. } = &fetch_response {
                 info!("Writing file to: {}", target_file.to_string_lossy());
                 file_ops::write_buf(target_file, bytes)?;
