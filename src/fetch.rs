@@ -174,6 +174,9 @@ impl FetchSource {
 
         if let Some(target_file) = target_file {
             // Verify the path does not contain ../
+            // This is not an exhaustive check, but better than nothing.
+            // It is assumed you are using krill-sync with your own Krill
+            // instance, and not do path traversal on your own instance.
             if target_file.components().any(|p| p == Component::ParentDir) {
                 return Err(anyhow!(
                     "Path {} contains illegal parent dir reference",
