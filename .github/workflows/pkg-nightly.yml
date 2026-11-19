@@ -39,19 +39,19 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
-          path: ./nightly
+          path: .
           pattern: "!(tmp*)"
       - name: Create index for the artifacts
         uses: Koenvh1/directory-listing@main
         with:
-          target: ./nightly
+          target: .
           project: "krill-sync"
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './nightly'
+          path: '.'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
