@@ -40,9 +40,9 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: '.'
-          pattern: "!(tmp*)"
+          pattern: "!tmp*"
       - name: Create index for the artifacts
-        uses: Koenvh1/directory-listing@main
+        uses: NLnetLabs/directory-listing@main
         with:
           target: '.'
           project: "krill-sync"
